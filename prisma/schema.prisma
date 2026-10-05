@@ -1,0 +1,454 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  password_hash String
+  is_admin      Boolean  @default(false)
+  role          String   @default("sub_user")
+  full_name     String   @default("")
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("users")
+}
+
+model HeadAccount {
+  id         String    @id @default(uuid()) @db.Uuid
+  code       String    @unique
+  name       String
+  type       String
+  bal        String
+  created_at DateTime  @default(now()) @db.Timestamptz(6)
+  accounts   Account[]
+
+  @@map("head_accounts")
+}
+
+model Account {
+  id           String      @id @default(uuid()) @db.Uuid
+  name         String
+  head_id      String?     @db.Uuid
+  type         String
+  phone        String      @default("")
+  whatsapp     String      @default("")
+  address      String      @default("")
+  balance      Decimal     @default(0) @db.Decimal(12, 2)
+  bal_type     String      @default("debit")
+  ntn          String      @default("")
+  status       String      @default("Active")
+  created_at   DateTime    @default(now()) @db.Timestamptz(6)
+  head_account HeadAccount? @relation(fields: [head_id], references: [id])
+
+  @@map("accounts")
+}
+
+model Product {
+  id           String   @id @default(uuid()) @db.Uuid
+  code         String   @unique
+  name         String
+  description  String?  @default("")
+  cost_price   Decimal  @default(0) @db.Decimal(12, 2)
+  sale_price   Decimal  @default(0) @db.Decimal(12, 2)
+  pricing_type String   @default("sqft")
+  created_at   DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("products")
+}
+
+model Cashbook {
+  id               String   @id @default(uuid()) @db.Uuid
+  type             String
+  description      String
+  amount           Decimal  @db.Decimal(12, 2)
+  date             DateTime @db.Date
+  method           String   @default("Cash")
+  reference        String   @default("")
+  account_name     String   @default("")
+  created_by_email String   @default("")
+  created_by_name  String   @default("")
+  created_at       DateTime @default(now()) @db.Timestamptz(6)
+
+  purchase_orders PurchaseOrder[]
+  expenses        Expense[]
+
+  @@map("cashbook")
+}
+
+model Invoice {
+  id               String        @id @default(uuid()) @db.Uuid
+  invoice_number   String        @unique
+  client_name      String
+  client_phone     String        @default("")
+  client_address   String        @default("")
+  client_ntn       String        @default("")
+  client_email     String        @default("")
+  invoice_date     DateTime      @db.Date
+  due_date         DateTime?     @db.Date
+  payment_terms    String        @default("Net 15 Days")
+  reference        String        @default("")
+  subtotal         Decimal       @default(0) @db.Decimal(12, 2)
+  discount_type    String        @default("pct")
+  discount_value   Decimal       @default(0) @db.Decimal(12, 2)
+  discount_amount  Decimal       @default(0) @db.Decimal(12, 2)
+  gst_pct          Decimal       @default(0) @db.Decimal(5, 2)
+  gst_amount       Decimal       @default(0) @db.Decimal(12, 2)
+  stax_pct         Decimal       @default(0) @db.Decimal(5, 2)
+  stax_amount      Decimal       @default(0) @db.Decimal(12, 2)
+  bra_pct          Decimal       @default(0) @db.Decimal(6, 2)
+  bra_amount       Decimal       @default(0) @db.Decimal(12, 2)
+  previous_balance Decimal       @default(0) @db.Decimal(12, 2)
+  grand_total      Decimal       @default(0) @db.Decimal(12, 2)
+  amount_received  Decimal       @default(0) @db.Decimal(12, 2)
+  balance_due      Decimal       @default(0) @db.Decimal(12, 2)
+  payment_status   String        @default("unpaid")
+  payment_method   String        @default("Cash")
+  job_name         String        @default("")
+  job_location     String        @default("")
+  job_start        DateTime?     @db.Date
+  job_end          DateTime?     @db.Date
+  job_notes        String        @default("")
+  is_walk_in       Boolean       @default(false)
+  created_by_email String        @default("")
+  created_by_name  String        @default("")
+  created_at       DateTime      @default(now()) @db.Timestamptz(6)
+  items            InvoiceItem[]
+  quotations       Quotation[]
+  expenses         Expense[]
+
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  invoice_id  String?  @db.Uuid
+  category    String   @default("Billboard")
+  description String   @default("")
+  width       Decimal  @default(0) @db.Decimal(8, 2)
+  height      Decimal  @default(0) @db.Decimal(8, 2)
+  sqft        Decimal  @default(0) @db.Decimal(10, 2)
+  rate        Decimal  @default(0) @db.Decimal(10, 2)
+  qty         Int      @default(1)
+  amount      Decimal  @default(0) @db.Decimal(12, 2)
+  invoice     Invoice? @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+
+  @@map("invoice_items")
+}
+
+model Expense {
+  id                String    @id @default(uuid()) @db.Uuid
+  expense_number    String?   @unique
+  category          String    @default("")
+  invoice_id        String?   @db.Uuid
+  invoice_number    String    @default("")
+  description       String    @default("")
+  amount            Decimal   @default(0) @db.Decimal(12, 2)
+  date              DateTime  @db.Date
+  method            String    @default("Cash")
+  completed         Boolean   @default(false)
+  cashbook_entry_id String?   @db.Uuid
+  created_by_email  String    @default("")
+  created_by_name   String    @default("")
+  created_at        DateTime  @default(now()) @db.Timestamptz(6)
+  invoice           Invoice?  @relation(fields: [invoice_id], references: [id], onDelete: SetNull)
+  cashbook_entry    Cashbook? @relation(fields: [cashbook_entry_id], references: [id], onDelete: SetNull)
+
+  @@map("expenses")
+}
+
+model QuickInvoice {
+  id               String             @id @default(uuid()) @db.Uuid
+  invoice_number   String
+  client_name      String
+  grand_total      Decimal            @default(0) @db.Decimal(12, 2)
+  created_by_email String             @default("")
+  created_by_name  String             @default("")
+  created_at       DateTime           @default(now()) @db.Timestamptz(6)
+  items            QuickInvoiceItem[]
+
+  @@map("quick_invoices")
+}
+
+model QuickInvoiceItem {
+  id                String       @id @default(uuid()) @db.Uuid
+  quick_invoice_id  String?      @db.Uuid
+  product           String       @default("")
+  description       String       @default("")
+  width             Decimal      @default(0) @db.Decimal(8, 2)
+  height            Decimal      @default(0) @db.Decimal(8, 2)
+  total_size        Decimal      @default(0) @db.Decimal(10, 2)
+  rate_per_sqft     Decimal      @default(0) @db.Decimal(10, 2)
+  total             Decimal      @default(0) @db.Decimal(12, 2)
+  qty               Int          @default(1)
+  grand_total       Decimal      @default(0) @db.Decimal(12, 2)
+  quick_invoice     QuickInvoice? @relation(fields: [quick_invoice_id], references: [id], onDelete: Cascade)
+
+  @@map("quick_invoice_items")
+}
+
+model QuotationProduct {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String
+  sale_price Decimal  @default(0) @db.Decimal(12, 2)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("quotation_products")
+}
+
+model Quotation {
+  id                String          @id @default(uuid()) @db.Uuid
+  quote_number      String          @unique
+  party_name        String          @default("")
+  quote_date        DateTime        @db.Date
+  quote_time        String          @default("")
+  cell              String          @default("")
+  del_no            String          @default("")
+  terms             String          @default("")
+  recv_name         String          @default("")
+  recv_date         String          @default("")
+  deliver_name      String          @default("")
+  source_invoice_id String?         @db.Uuid
+  grand_total       Decimal         @default(0) @db.Decimal(12, 2)
+  created_by_email  String          @default("")
+  created_by_name   String          @default("")
+  created_at        DateTime        @default(now()) @db.Timestamptz(6)
+  source_invoice    Invoice?        @relation(fields: [source_invoice_id], references: [id], onDelete: SetNull)
+  items             QuotationItem[]
+
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id           String    @id @default(uuid()) @db.Uuid
+  quotation_id String    @db.Uuid
+  product      String    @default("")
+  description  String    @default("")
+  width        Decimal   @default(0) @db.Decimal(8, 2)
+  height       Decimal   @default(0) @db.Decimal(8, 2)
+  sqft         Decimal   @default(0) @db.Decimal(10, 2)
+  rate         Decimal   @default(0) @db.Decimal(10, 2)
+  qty          Int       @default(1)
+  amount       Decimal   @default(0) @db.Decimal(12, 2)
+  quotation    Quotation @relation(fields: [quotation_id], references: [id], onDelete: Cascade)
+
+  @@map("quotation_items")
+}
+
+model Supplier {
+  id              String          @id @default(uuid()) @db.Uuid
+  name            String
+  phone           String          @default("")
+  address         String          @default("")
+  notes           String          @default("")
+  opening_balance Decimal         @default(0) @db.Decimal(12, 2)
+  created_at      DateTime        @default(now()) @db.Timestamptz(6)
+  purchase_orders PurchaseOrder[]
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id                String              @id @default(uuid()) @db.Uuid
+  po_number         String              @unique
+  supplier_id       String?             @db.Uuid
+  supplier_name     String
+  supplier_phone    String              @default("")
+  order_date        DateTime            @db.Date
+  notes             String              @default("")
+  subtotal          Decimal             @default(0) @db.Decimal(12, 2)
+  grand_total       Decimal             @default(0) @db.Decimal(12, 2)
+  amount_paid       Decimal             @default(0) @db.Decimal(12, 2)
+  balance_due       Decimal             @default(0) @db.Decimal(12, 2)
+  payment_status    String              @default("unpaid")
+  payment_method    String              @default("Cash")
+  cashbook_entry_id String?             @db.Uuid
+  created_by_email  String              @default("")
+  created_by_name   String              @default("")
+  created_at        DateTime            @default(now()) @db.Timestamptz(6)
+  supplier          Supplier?           @relation(fields: [supplier_id], references: [id], onDelete: SetNull)
+  cashbook_entry    Cashbook?           @relation(fields: [cashbook_entry_id], references: [id], onDelete: SetNull)
+  items             PurchaseOrderItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id                String        @id @default(uuid()) @db.Uuid
+  purchase_order_id String        @db.Uuid
+  description       String        @default("")
+  unit              String        @default("pcs")
+  qty               Decimal       @default(1) @db.Decimal(12, 2)
+  rate              Decimal       @default(0) @db.Decimal(12, 2)
+  amount            Decimal       @default(0) @db.Decimal(12, 2)
+  purchase_order    PurchaseOrder @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade)
+
+  @@map("purchase_order_items")
+}
+
+model PurchaseProduct {
+  id         String   @id @default(uuid()) @db.Uuid
+  code       String?  @unique
+  name       String
+  unit       String   @default("pcs")
+  cost_price Decimal  @default(0) @db.Decimal(12, 2)
+  gram       Decimal? @db.Decimal(10, 2)
+  meter      Decimal? @db.Decimal(10, 2)
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("purchase_products")
+}
+
+model Worker {
+  id                    String          @id @default(uuid()) @db.Uuid
+  name                  String
+  phone                 String          @default("")
+  role                  String          @default("")
+  monthly_wage          Decimal         @default(0) @db.Decimal(12, 2)
+  status                String          @default("Active")
+  hourly_overtime_rate  Decimal         @default(0) @db.Decimal(12, 2)
+  standard_working_days Int             @default(26)
+  created_at            DateTime        @default(now()) @db.Timestamptz(6)
+  advances              WorkerAdvance[]
+  payments              WorkerPayment[]
+  extra_hours           WorkerExtraHours[]
+
+  @@map("workers")
+}
+
+model WorkerExtraHours {
+  id            String   @id @default(uuid()) @db.Uuid
+  worker_id     String?  @db.Uuid
+  month         String
+  hours         Decimal  @db.Decimal(10, 2)
+  rate_per_hour Decimal  @db.Decimal(12, 2)
+  amount        Decimal  @db.Decimal(12, 2)
+  payment_id    String?  @db.Uuid
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  worker        Worker?  @relation(fields: [worker_id], references: [id], onDelete: Cascade)
+
+  @@map("worker_extra_hours")
+}
+
+model WorkerAdvance {
+  id                String   @id @default(uuid()) @db.Uuid
+  worker_id         String?  @db.Uuid
+  amount            Decimal  @db.Decimal(12, 2)
+  date              DateTime @db.Date
+  month             String
+  notes             String   @default("")
+  cashbook_entry_id String?  @db.Uuid
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  worker            Worker?  @relation(fields: [worker_id], references: [id], onDelete: Cascade)
+
+  @@map("worker_advances")
+}
+
+model WorkerPayment {
+  id                 String   @id @default(uuid()) @db.Uuid
+  worker_id          String?  @db.Uuid
+  month              String
+  total_wage         Decimal  @default(0) @db.Decimal(12, 2)
+  advance_total      Decimal  @default(0) @db.Decimal(12, 2)
+  net_paid           Decimal  @default(0) @db.Decimal(12, 2)
+  paid_date          DateTime @db.Date
+  cashbook_entry_id  String?  @db.Uuid
+  notes              String   @default("")
+  overtime_hours     Decimal  @default(0) @db.Decimal(10, 2)
+  overtime_amount    Decimal  @default(0) @db.Decimal(12, 2)
+  absent_days        Decimal  @default(0) @db.Decimal(8, 2)
+  absence_deduction  Decimal  @default(0) @db.Decimal(12, 2)
+  created_by_email   String   @default("")
+  created_by_name    String   @default("")
+  created_at         DateTime @default(now()) @db.Timestamptz(6)
+  worker             Worker?  @relation(fields: [worker_id], references: [id], onDelete: Cascade)
+
+  @@map("worker_payments")
+}
+
+model Laborer {
+  id              String        @id @default(uuid()) @db.Uuid
+  name            String
+  phone           String        @default("")
+  role            String        @default("")
+  status          String        @default("Active")
+  advance_balance Decimal       @default(0) @db.Decimal(12, 2)
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  tasks           LaborTask[]
+  advances        LaborAdvance[]
+
+  @@map("laborers")
+}
+
+model LaborTask {
+  id                   String   @id @default(uuid()) @db.Uuid
+  laborer_id           String?  @db.Uuid
+  task_name            String
+  description          String   @default("")
+  amount               Decimal  @db.Decimal(12, 2)
+  date                 DateTime @db.Date
+  status               String   @default("pending")
+  cashbook_entry_id    String?  @db.Uuid
+  advance              Decimal  @default(0) @db.Decimal(12, 2)
+  advance_from_balance Decimal  @default(0) @db.Decimal(12, 2)
+  width                Decimal? @db.Decimal(10, 2)
+  height               Decimal? @db.Decimal(10, 2)
+  sqft                 Decimal? @db.Decimal(10, 2)
+  created_by_email     String   @default("")
+  created_by_name      String   @default("")
+  created_at           DateTime @default(now()) @db.Timestamptz(6)
+  laborer              Laborer? @relation(fields: [laborer_id], references: [id], onDelete: Cascade)
+
+  @@map("labor_tasks")
+}
+
+model LaborAdvance {
+  id                String   @id @default(uuid()) @db.Uuid
+  laborer_id        String?  @db.Uuid
+  amount            Decimal  @db.Decimal(12, 2)
+  date              DateTime @db.Date
+  notes             String   @default("")
+  cashbook_entry_id String?  @db.Uuid
+  created_at        DateTime @default(now()) @db.Timestamptz(6)
+  laborer           Laborer? @relation(fields: [laborer_id], references: [id], onDelete: Cascade)
+
+  @@map("labor_advances")
+}
+
+model PaymentMethod {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String   @unique
+  opening_balance Decimal  @default(0) @db.Decimal(12, 2)
+  archived        Boolean  @default(false)
+  sort_order      Int      @default(0)
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("payment_methods")
+}
+
+model ActivityLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  action      String
+  entity_type String
+  entity_id   String   @default("")
+  title       String   @default("")
+  subtitle    String   @default("")
+  amount      Decimal? @db.Decimal(12, 2)
+  metadata    String   @default("")
+  user_id     String?  @db.Uuid
+  user_email  String   @default("")
+  user_name   String   @default("")
+  created_at  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([created_at])
+  @@index([entity_type])
+  @@index([action])
+  @@index([user_id])
+  @@map("activity_log")
+}

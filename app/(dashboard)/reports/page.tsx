@@ -1,0 +1,1532 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import { db } from "@/lib/db";
+import { formatCurrency, formatDate, todayISO } from "@/lib/helpers";
+import {
+  Printer, FileText, TrendingUp, TrendingDown, Users, CalendarDays,
+  LayoutDashboard, Receipt, ArrowLeftRight, ChevronRight, Wallet,
+} from "lucide-react";
+import type { Invoice, CashbookEntry, Account, Expense } from "@/lib/database.types";
+import { DT } from "@/lib/dataTableStyles";
+import { PdfPrintBanner } from "@/components/PdfPrintBanner";
+import { PrintFooter } from "@/components/PrintFooter";
+import { useUser } from "@/lib/UserContext";
+import { SearchableSelect } from "@/components/SearchableSelect";
+import { usePaymentMethods, normalizePaymentMethod } from "@/lib/paymentMethods";
+
+type Tab = "overview" | "account" | "invoices" | "cashflow" | "dailycash" | "dailyparties" | "paymentmethod" | "expense";
+
+const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
+  paid:    { bg: "var(--green-light)", color: "var(--green)", label: "Paid" },
+  partial: { bg: "var(--orange-light)", color: "#B45309", label: "Partial" },
+  unpaid:  { bg: "var(--red-light)", color: "var(--red)", label: "Unpaid" },
+};
+
+function getPresetDates(preset: string): { from: string; to: string } | null {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  switch (preset) {
+    case "thismonth":
+      return { from: new Date(y, m, 1).toISOString().split("T")[0], to: new Date(y, m + 1, 0).toISOString().split("T")[0] };
+    case "lastmonth":
+      return { from: new Date(y, m - 1, 1).toISOString().split("T")[0], to: new Date(y, m, 0).toISOString().split("T")[0] };
+    case "last3":
+      return { from: new Date(y, m - 2, 1).toISOString().split("T")[0], to: today.toISOString().split("T")[0] };
+    case "last6":
+      return { from: new Date(y, m - 5, 1).toISOString().split("T")[0], to: today.toISOString().split("T")[0] };
+    case "thisyear":
+      return { from: new Date(y, 0, 1).toISOString().split("T")[0], to: new Date(y, 11, 31).toISOString().split("T")[0] };
+    default:
+      return null;
+  }
+}
+
+// ── Mini KPI card ──────────────────────────────────────────
+function KpiCard({ label, value, color, sub }: { label: string; value: string; color: string; sub?: string }) {
+  return (
+    <div className="bg-white rounded-[12px] border border-[var(--gray-100)] px-4 py-3" style={{ boxShadow: "var(--shadow-xs)" }}>
+      <div className="text-[9.5px] font-bold tracking-[1.3px] uppercase mb-1" style={{ color: "var(--gray-800)" }}>{label}</div>
+      <div className="text-[14px] font-extrabold font-mono" style={{ color }}>{value}</div>
+      {sub && <div className="text-[10px] mt-0.5" style={{ color: "var(--gray-800)" }}>{sub}</div>}
+    </div>
+  );
+}
+
+const REPORT_CARDS: { id: Tab; title: string; description: string; icon: ReactNode }[] = [
+  { id: "overview", title: "Overview", description: "Revenue, collections, balance due, and invoice status for a period.", icon: <LayoutDashboard size={22} /> },
+  { id: "account", title: "Account Statement", description: "Debit / credit ledger for one party between two dates.", icon: <FileText size={22} /> },
+  { id: "invoices", title: "Invoice Report", description: "Detailed invoice register with totals for a period.", icon: <Receipt size={22} /> },
+  { id: "cashflow", title: "Cash Flow", description: "Cashbook entries with running balance for a period.", icon: <ArrowLeftRight size={22} /> },
+  { id: "dailycash", title: "Daily Cashbook", description: "All cash in and out for a single day.", icon: <CalendarDays size={22} /> },
+  { id: "dailyparties", title: "Daily Parties", description: "Invoices issued on a selected day by party.", icon: <Users size={22} /> },
+  { id: "paymentmethod", title: "Payment Method Report", description: "Cashbook transactions filtered by a single payment method.", icon: <Wallet size={22} /> },
+  { id: "expense", title: "Expense Report", description: "All business expenses for a period, with category, method, and totals.", icon: <TrendingDown size={22} /> },
+];
+
+function ReportTypeCard({
+  title, description, icon, active, onClick,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-left w-full rounded-[14px] border p-4 transition-all cursor-pointer flex flex-col gap-2 min-h-[128px]"
+      style={{
+        borderColor: active ? "var(--blue)" : "var(--gray-100)",
+        background: active ? "var(--blue-pale)" : "var(--white)",
+        boxShadow: active ? "var(--shadow-sm)" : "var(--shadow-xs)",
+      }}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div
+          className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0"
+          style={{ background: active ? "var(--blue-light)" : "var(--gray-50)", color: "var(--blue-deeper)" }}
+        >
+          {icon}
+        </div>
+        <ChevronRight size={18} className="shrink-0 mt-1" style={{ color: active ? "var(--blue-deeper)" : "var(--gray-300)" }} />
+      </div>
+      <div>
+        <div className="text-[13px] font-extrabold mb-1" style={{ color: "var(--gray-900)" }}>{title}</div>
+        <p className="text-[11px] leading-snug m-0" style={{ color: "var(--gray-800)" }}>{description}</p>
+      </div>
+    </button>
+  );
+}
+
+// ══════════════════════════════════════════════════════════
+export default function ReportsPage() {
+  const userProfile = useUser();
+  const [activeTab, setActiveTab] = useState<Tab | null>(null);
+  const [reportGenerated, setReportGenerated] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  // ── Master filter state ───────────────────────────────────
+  const [fromDate, setFromDate] = useState(() => {
+    const d = new Date(); d.setDate(1);
+    return d.toISOString().split("T")[0];
+  });
+  const [toDate, setToDate] = useState(todayISO());
+  const [preset, setPreset] = useState("thismonth");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [methodFilter, setMethodFilter] = useState("all");
+  const { methods: paymentMethods } = usePaymentMethods();
+  // ── Daily tab date state ──────────────────────────────────
+  const [dailyDate, setDailyDate] = useState(todayISO());
+
+  // ── Data ──────────────────────────────────────────────────
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [cashbook, setCashbook] = useState<CashbookEntry[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [dailyCashbook, setDailyCashbook] = useState<CashbookEntry[]>([]);
+  const [dailyInvoices, setDailyInvoices] = useState<Invoice[]>([]);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [expenseByInvoice, setExpenseByInvoice] = useState<Record<string, number>>({});
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+
+  // ── Fetch main data ───────────────────────────────────────
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    const invoiceQuery = db
+      .from("invoices")
+      .select("*")
+      .gte("invoice_date", fromDate)
+      .lte("invoice_date", toDate)
+      .order("invoice_date", { ascending: true });
+    const cashbookQuery = db
+      .from("cashbook")
+      .select("*")
+      .gte("date", fromDate)
+      .lte("date", toDate)
+      .order("date", { ascending: true })
+      .order("created_at", { ascending: true });
+    const expensesQuery = db.from("expenses").select("invoice_id, amount");
+    const expensesPeriodQuery = db
+      .from("expenses")
+      .select("*")
+      .gte("date", fromDate)
+      .lte("date", toDate)
+      .order("date", { ascending: true })
+      .order("created_at", { ascending: true });
+    const [{ data: invData }, { data: cbData }, { data: expData }, { data: expPeriod }] = await Promise.all([invoiceQuery, cashbookQuery, expensesQuery, expensesPeriodQuery]);
+    if (invData) setInvoices(invData);
+    if (cbData) setCashbook(cbData);
+    const map: Record<string, number> = {};
+    for (const e of (expData ?? []) as { invoice_id: string | null; amount: number | string }[]) {
+      if (e.invoice_id) map[e.invoice_id] = (map[e.invoice_id] ?? 0) + Number(e.amount);
+    }
+    setExpenseByInvoice(map);
+    setExpenses((expPeriod ?? []) as Expense[]);
+    setLoading(false);
+  }, [fromDate, toDate]);
+
+  useEffect(() => {
+    db.from("accounts").select("*").order("name").then(({ data }) => {
+      if (data) setAccounts(data);
+    });
+  }, []);
+
+  useEffect(() => {
+    setReportGenerated(false);
+  }, [fromDate, toDate, accountFilter, methodFilter, preset, dailyDate, activeTab]);
+
+  // ── Fetch daily data ──────────────────────────────────────
+  const fetchDailyData = useCallback(async () => {
+    setDailyLoading(true);
+    const dailyCashbookQuery = db.from("cashbook").select("*").eq("date", dailyDate).order("created_at", { ascending: true });
+    const dailyInvoiceQuery = db.from("invoices").select("*").eq("invoice_date", dailyDate).order("created_at", { ascending: true });
+    const [{ data: cbData }, { data: invData }] = await Promise.all([dailyCashbookQuery, dailyInvoiceQuery]);
+    if (cbData) setDailyCashbook(cbData);
+    if (invData) setDailyInvoices(invData);
+    setDailyLoading(false);
+  }, [dailyDate]);
+
+
+  async function handleGenerateReport() {
+    setGenerateError(null);
+    if (!activeTab) {
+      setGenerateError("Choose a report type from the cards above.");
+      return;
+    }
+    if (activeTab === "account" && accountFilter === "all") {
+      setGenerateError("Select an account / party for the account statement.");
+      return;
+    }
+    if (activeTab === "paymentmethod" && methodFilter === "all") {
+      setGenerateError("Select a payment method to generate this report.");
+      return;
+    }
+    if (activeTab === "dailycash" || activeTab === "dailyparties") {
+      await fetchDailyData();
+    } else {
+      await fetchData();
+    }
+    setReportGenerated(true);
+  }
+
+  function selectReport(t: Tab) {
+    setActiveTab(t);
+    setGenerateError(null);
+  }
+
+  // ── Preset handler ────────────────────────────────────────
+  function applyPreset(val: string) {
+    setPreset(val);
+    const dates = getPresetDates(val);
+    if (dates) { setFromDate(dates.from); setToDate(dates.to); }
+  }
+
+  // ── Derived: invoice stats ────────────────────────────────
+  const filteredInvoices = useMemo(() =>
+    accountFilter === "all" ? invoices : invoices.filter((i) => i.client_name === accountFilter),
+    [invoices, accountFilter]
+  );
+
+  // ── Derived: expense report ───────────────────────────────
+  const expenseTotal = useMemo(() => expenses.reduce((s, e) => s + Number(e.amount), 0), [expenses]);
+
+  const totalRevenue   = useMemo(() => filteredInvoices.reduce((s, i) => s + Number(i.grand_total), 0), [filteredInvoices]);
+  const totalCollected = useMemo(() => filteredInvoices.reduce((s, i) => s + Number(i.amount_received), 0), [filteredInvoices]);
+  const totalDue       = useMemo(() => filteredInvoices.reduce((s, i) => s + Number(i.balance_due), 0), [filteredInvoices]);
+
+  // ── Derived: cashbook stats ───────────────────────────────
+  const totalCashIn  = useMemo(() => cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0), [cashbook]);
+  const totalCashOut = useMemo(() => cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0), [cashbook]);
+
+  // ── Derived: account statement ────────────────────────────
+  const accStatementRows = useMemo(() => {
+    if (accountFilter === "all") return [];
+    const rows: { date: string; doc: string; desc: string; debit: number; credit: number; method: string }[] = [];
+    invoices
+      .filter((i) => i.client_name === accountFilter)
+      .forEach((i) => {
+        rows.push({ date: i.invoice_date, doc: i.invoice_number, desc: `Invoice — ${i.job_name || i.client_name}`, debit: Number(i.grand_total), credit: 0, method: i.payment_method || "—" });
+        if (Number(i.amount_received) > 0) {
+          rows.push({ date: i.invoice_date, doc: i.invoice_number, desc: `Payment Received`, debit: 0, credit: Number(i.amount_received), method: i.payment_method || "—" });
+        }
+      });
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+    return rows;
+  }, [invoices, accountFilter]);
+
+  const accStatementWithBal = useMemo(() => {
+    let bal = 0;
+    return accStatementRows.map((r) => { bal += r.debit - r.credit; return { ...r, balance: bal }; });
+  }, [accStatementRows]);
+
+  // ── Derived: cashbook with running balance ────────────────
+  const cashbookWithBal = useMemo(() => {
+    return cashbook.reduce<Array<CashbookEntry & { runningBal: number }>>((acc, c) => {
+      const prev = acc.length > 0 ? acc[acc.length - 1].runningBal : 0;
+      const nextBal = prev + (c.type === "in" ? Number(c.amount) : -Number(c.amount));
+      acc.push({ ...c, runningBal: nextBal });
+      return acc;
+    }, []);
+  }, [cashbook]);
+
+  // ── Derived: daily cashbook running bal ───────────────────
+  const dailyCashWithBal = useMemo(() => {
+    return dailyCashbook.reduce<Array<CashbookEntry & { runningBal: number }>>((acc, c) => {
+      const prev = acc.length > 0 ? acc[acc.length - 1].runningBal : 0;
+      const nextBal = prev + (c.type === "in" ? Number(c.amount) : -Number(c.amount));
+      acc.push({ ...c, runningBal: nextBal });
+      return acc;
+    }, []);
+  }, [dailyCashbook]);
+
+  // ── Derived: payment-method filtered cashbook ─────────────
+  const methodCashbook = useMemo(() => {
+    if (methodFilter === "all") return [] as CashbookEntry[];
+    return cashbook.filter((c) => normalizePaymentMethod(c.method) === methodFilter);
+  }, [cashbook, methodFilter]);
+
+  const methodOpeningBalance = useMemo(() => {
+    if (methodFilter === "all") return 0;
+    const m = paymentMethods.find((pm) => pm.name === methodFilter);
+    return m ? Number(m.opening_balance) : 0;
+  }, [paymentMethods, methodFilter]);
+
+  const methodCashbookWithBal = useMemo(() => {
+    return methodCashbook.reduce<Array<CashbookEntry & { runningBal: number }>>((acc, c) => {
+      const prev = acc.length > 0 ? acc[acc.length - 1].runningBal : methodOpeningBalance;
+      const nextBal = prev + (c.type === "in" ? Number(c.amount) : -Number(c.amount));
+      acc.push({ ...c, runningBal: nextBal });
+      return acc;
+    }, []);
+  }, [methodCashbook, methodOpeningBalance]);
+
+  const methodCashIn = useMemo(() => methodCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0), [methodCashbook]);
+  const methodCashOut = useMemo(() => methodCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0), [methodCashbook]);
+
+  // ── Filter label ──────────────────────────────────────────
+  const filterLabel = `${formatDate(fromDate)} — ${formatDate(toDate)}${accountFilter !== "all" ? ` · ${accountFilter}` : ""}${activeTab === "paymentmethod" && methodFilter !== "all" ? ` · ${methodFilter}` : ""}`;
+
+  // ──────────────────────────────────────────────────────────
+  return (
+    <>
+      {/* ── Screen UI ── */}
+      <div className="no-print animate-fade-in">
+
+        {/* Page header */}
+        <div className="mb-5">
+          <h1 className="text-xl font-extrabold" style={{ color: "var(--gray-900)" }}>Reports</h1>
+          <p className="text-xs mt-0.5" style={{ color: "var(--gray-800)" }}>Pick a report, set filters, then generate — no charts, export-friendly tables.</p>
+        </div>
+
+        {/* Report type cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+          {REPORT_CARDS.map((card) => (
+            <ReportTypeCard
+              key={card.id}
+              title={card.title}
+              description={card.description}
+              icon={card.icon}
+              active={activeTab === card.id}
+              onClick={() => selectReport(card.id)}
+            />
+          ))}
+        </div>
+
+        {/* Filters for selected report */}
+        {activeTab && (
+          <div className="bg-white rounded-[14px] border border-[var(--gray-100)] p-4 mb-4" style={{ boxShadow: "var(--shadow-sm)" }}>
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4 pb-3 border-b border-[var(--gray-100)]">
+              <div>
+                <div className="text-[9.5px] font-bold tracking-[1.4px] uppercase mb-0.5" style={{ color: "var(--gray-800)" }}>Filters</div>
+                <div className="text-[14px] font-extrabold" style={{ color: "var(--gray-900)" }}>
+                  {REPORT_CARDS.find((c) => c.id === activeTab)?.title}
+                </div>
+                {!reportGenerated && (
+                  <p className="text-[11px] m-0 mt-1" style={{ color: "var(--gray-800)" }}>Adjust filters and click Generate to load this report.</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  disabled={!activeTab || !reportGenerated}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                  style={{ borderColor: "var(--gray-200)", color: "var(--blue-deeper)" }}
+                >
+                  <Printer size={14} /> Print / PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleGenerateReport()}
+                  disabled={loading || dailyLoading}
+                  className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-60"
+                  style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+                >
+                  {loading || dailyLoading ? "Loading…" : "Generate report"}
+                </button>
+              </div>
+            </div>
+
+            {generateError && (
+              <div className="mb-3 px-3 py-2 rounded-[8px] text-[12px] font-medium" style={{ background: "var(--red-light)", color: "var(--red)" }}>
+                {generateError}
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-3 items-end">
+              {activeTab === "dailycash" || activeTab === "dailyparties" ? (
+                <div className="flex flex-col gap-1">
+                  <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Report date</label>
+                  <input
+                    type="date"
+                    value={dailyDate}
+                    onChange={(e) => setDailyDate(e.target.value)}
+                    className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
+                    style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                  />
+                </div>
+              ) : (
+                <>
+                  {activeTab === "paymentmethod" ? (
+                    <div className="flex flex-col gap-1 min-w-[200px] flex-1 max-w-[280px]">
+                      <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+                        Payment method *
+                      </label>
+                      <SearchableSelect
+                        value={methodFilter}
+                        onChange={setMethodFilter}
+                        options={paymentMethods.map((m) => ({ value: m.name, label: m.name }))}
+                        placeholder="— Select payment method —"
+                        emptyValue="all"
+                        inputClassName="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none w-full"
+                        inputStyle={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                      />
+                    </div>
+                  ) : activeTab === "expense" ? null : (
+                  <div className="flex flex-col gap-1 min-w-[200px] flex-1 max-w-[280px]">
+                    <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+                      Account / Party{activeTab === "account" ? " *" : ""}
+                    </label>
+                    <SearchableSelect
+                      value={accountFilter}
+                      onChange={setAccountFilter}
+                      options={accounts.map((a) => ({ value: a.name, label: a.name }))}
+                      placeholder={activeTab === "account" ? "— Select party —" : "— All parties —"}
+                      emptyValue="all"
+                      inputClassName="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none w-full"
+                      inputStyle={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                    />
+                  </div>
+                  )}
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Date from</label>
+                    <input
+                      type="date"
+                      value={fromDate}
+                      onChange={(e) => { setFromDate(e.target.value); setPreset(""); }}
+                      className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
+                      style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Date to</label>
+                    <input
+                      type="date"
+                      value={toDate}
+                      onChange={(e) => { setToDate(e.target.value); setPreset(""); }}
+                      className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
+                      style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Period preset</label>
+                    <select
+                      value={preset}
+                      onChange={(e) => applyPreset(e.target.value)}
+                      className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none cursor-pointer"
+                      style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
+                    >
+                      <option value="">Custom range</option>
+                      <option value="thismonth">This month</option>
+                      <option value="lastmonth">Last month</option>
+                      <option value="last3">Last 3 months</option>
+                      <option value="last6">Last 6 months</option>
+                      <option value="thisyear">This year</option>
+                    </select>
+                  </div>
+                </>
+              )}
+              <div className="ml-auto text-[11px] font-medium px-3 py-1.5 rounded-[7px] border self-end"
+                style={{ color: "var(--gray-800)", background: "var(--gray-50)", borderColor: "var(--gray-100)" }}>
+                {activeTab === "dailycash" || activeTab === "dailyparties"
+                  ? formatDate(dailyDate)
+                  : filterLabel}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!activeTab && (
+          <div className="text-center py-8 px-4 rounded-[14px] border border-dashed mb-4" style={{ borderColor: "var(--gray-200)", color: "var(--gray-800)" }}>
+            <p className="text-[13px] m-0">Select a report card above to open its filters.</p>
+          </div>
+        )}
+
+        {/* ── TAB: OVERVIEW ─────────────────────────────────── */}
+        {reportGenerated && activeTab === "overview" && (
+          <div>
+            {loading ? (
+              <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+            ) : (
+              <>
+                {/* KPIs */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <KpiCard label="Total Revenue" value={formatCurrency(totalRevenue)} color="var(--blue-deeper)" sub={`${filteredInvoices.length} invoices`} />
+                  <KpiCard label="Total Collected" value={formatCurrency(totalCollected)} color="var(--green)" />
+                  <KpiCard label="Balance Due" value={formatCurrency(totalDue)} color="var(--red)" />
+                  <KpiCard label="Net Cash Flow" value={formatCurrency(totalCashIn - totalCashOut)} color={totalCashIn - totalCashOut >= 0 ? "var(--green)" : "var(--red)"} sub={`In: ${formatCurrency(totalCashIn)} / Out: ${formatCurrency(totalCashOut)}`} />
+                </div>
+
+                {/* Invoice status breakdown */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                  {[
+                    { label: "Paid Invoices", count: filteredInvoices.filter((i) => i.payment_status === "paid").length, amt: filteredInvoices.filter((i) => i.payment_status === "paid").reduce((s, i) => s + Number(i.grand_total), 0), color: "var(--green)", bg: "var(--green-light)" },
+                    { label: "Partial Invoices", count: filteredInvoices.filter((i) => i.payment_status === "partial").length, amt: filteredInvoices.filter((i) => i.payment_status === "partial").reduce((s, i) => s + Number(i.grand_total), 0), color: "#B45309", bg: "var(--orange-light)" },
+                    { label: "Unpaid Invoices", count: filteredInvoices.filter((i) => i.payment_status === "unpaid").length, amt: filteredInvoices.filter((i) => i.payment_status === "unpaid").reduce((s, i) => s + Number(i.grand_total), 0), color: "var(--red)", bg: "var(--red-light)" },
+                  ].map((item) => (
+                    <div key={item.label} className="bg-white rounded-[12px] border border-[var(--gray-100)] px-4 py-3 flex justify-between items-center" style={{ boxShadow: "var(--shadow-xs)" }}>
+                      <div>
+                        <div className="text-[9.5px] font-bold tracking-[1.2px] uppercase mb-1" style={{ color: "var(--gray-800)" }}>{item.label}</div>
+                        <div className="text-[18px] font-extrabold" style={{ color: item.color }}>{item.count}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[10px] font-medium mb-1" style={{ color: "var(--gray-800)" }}>Total Amount</div>
+                        <div className="text-[12.5px] font-bold font-mono" style={{ color: item.color }}>{formatCurrency(item.amt)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB: ACCOUNT STATEMENT ────────────────────────── */}
+        {reportGenerated && activeTab === "account" && (
+          <div>
+            {accountFilter === "all" ? (
+              <div className="bg-white rounded-[14px] border border-[var(--gray-100)] py-16 text-center" style={{ boxShadow: "var(--shadow-sm)" }}>
+                <Users size={36} className="mx-auto mb-3" style={{ color: "var(--gray-200)" }} />
+                <p className="text-[13px] font-semibold mb-1" style={{ color: "var(--gray-900)" }}>Select an Account / Party</p>
+                <p className="text-[12px]" style={{ color: "var(--gray-800)" }}>Choose a party in the filters panel, then generate the report.</p>
+              </div>
+            ) : loading ? (
+              <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+            ) : (
+              <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+                {/* Statement header */}
+                <div className="px-5 py-4 border-b border-[var(--gray-100)] flex flex-wrap items-center justify-between gap-3" style={{ background: "var(--gray-50)" }}>
+                  <div>
+                    <div className="text-[13px] font-extrabold" style={{ color: "var(--gray-900)" }}>{accountFilter}</div>
+                    <div className="text-[11px] mt-0.5" style={{ color: "var(--gray-800)" }}>Account Statement · {formatDate(fromDate)} — {formatDate(toDate)}</div>
+                  </div>
+                  <div className="flex gap-4 flex-wrap">
+                    {[
+                      { label: "Total Billed", val: formatCurrency(accStatementRows.reduce((s, r) => s + r.debit, 0)), color: "var(--blue-deeper)" },
+                      { label: "Total Received", val: formatCurrency(accStatementRows.reduce((s, r) => s + r.credit, 0)), color: "var(--green)" },
+                      { label: "Closing Balance", val: formatCurrency(accStatementWithBal.at(-1)?.balance ?? 0), color: "var(--red)" },
+                    ].map((s) => (
+                      <div key={s.label} className="text-right">
+                        <div className="text-[9px] font-bold uppercase tracking-wider" style={{ color: "var(--gray-800)" }}>{s.label}</div>
+                        <div className="text-[13px] font-extrabold font-mono" style={{ color: s.color }}>{s.val}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {accStatementWithBal.length === 0 ? (
+                  <div className="py-14 text-center">
+                    <FileText size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                    <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No transactions found for this party in the selected period.</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className={`${DT.table} min-w-[700px]`}>
+                      <thead>
+                        <tr>
+                          {["Date", "Document #", "Description", "Debit", "Credit", "Balance", "Method"].map((h) => {
+                            const right = ["Debit", "Credit", "Balance"].includes(h);
+                            return (
+                              <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"}`} style={DT.thStyle}>{h}</th>
+                            );
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accStatementWithBal.map((r, idx) => (
+                          <tr key={idx} className={DT.row}>
+                            <td className={`${DT.tdDense} ${DT.cellBody} whitespace-nowrap`} style={{ color: "var(--gray-900)" }}>{formatDate(r.date)}</td>
+                            <td className={DT.tdDense}>
+                              <span className="font-mono text-[11px] font-bold" style={{ color: "var(--blue-deeper)" }}>{r.doc}</span>
+                            </td>
+                            <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-700)" }}>{r.desc}</td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: r.debit > 0 ? "var(--blue-deeper)" : "var(--gray-300)" }}>
+                              {r.debit > 0 ? formatCurrency(r.debit) : "—"}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: r.credit > 0 ? "var(--green)" : "var(--gray-300)" }}>
+                              {r.credit > 0 ? formatCurrency(r.credit) : "—"}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`} style={{ color: r.balance > 0 ? "var(--red)" : "var(--green)" }}>
+                              {formatCurrency(Math.abs(r.balance))}
+                            </td>
+                            <td className={DT.tdDense}>
+                              <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: "var(--gray-100)", color: "var(--gray-900)" }}>{r.method}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: "var(--gray-50)" }}>
+                          <td colSpan={3} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                            Closing Balance
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--blue-deeper)" }}>
+                            {formatCurrency(accStatementRows.reduce((s, r) => s + r.debit, 0))}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>
+                            {formatCurrency(accStatementRows.reduce((s, r) => s + r.credit, 0))}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`}
+                            style={{ color: (accStatementWithBal.at(-1)?.balance ?? 0) > 0 ? "var(--red)" : "var(--green)" }}>
+                            {formatCurrency(Math.abs(accStatementWithBal.at(-1)?.balance ?? 0))}
+                          </td>
+                          <td className={`${DT.tdDense} border-t-2 border-[var(--gray-200)]`} />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB: INVOICE REPORT ───────────────────────────── */}
+        {reportGenerated && activeTab === "invoices" && (
+          <div>
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
+              {[
+                { label: "Total Invoices", val: String(filteredInvoices.length), color: "var(--blue-deeper)" },
+                { label: "Total Amount", val: formatCurrency(totalRevenue), color: "var(--gray-900)" },
+                { label: "Received", val: formatCurrency(totalCollected), color: "var(--green)" },
+                { label: "Balance Due", val: formatCurrency(totalDue), color: "var(--red)" },
+                { label: "Paid", val: String(filteredInvoices.filter((i) => i.payment_status === "paid").length), color: "var(--green)" },
+                { label: "Unpaid / Partial", val: `${filteredInvoices.filter((i) => i.payment_status === "unpaid").length} / ${filteredInvoices.filter((i) => i.payment_status === "partial").length}`, color: "var(--red)" },
+              ].map((c) => (
+                <div key={c.label} className="bg-white rounded-[12px] border border-[var(--gray-100)] px-4 py-3" style={{ boxShadow: "var(--shadow-xs)" }}>
+                  <div className="text-[10px] font-bold tracking-wider uppercase mb-1" style={{ color: "var(--gray-800)" }}>{c.label}</div>
+                  <div className="text-[14px] font-extrabold font-mono" style={{ color: c.color }}>{c.val}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+              {loading ? (
+                <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+              ) : filteredInvoices.length === 0 ? (
+                <div className="py-14 text-center">
+                  <FileText size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No invoices found for this period.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className={`${DT.table} min-w-[900px]`}>
+                    <thead>
+                      <tr>
+                        {["#", "Invoice No", "Date", "Client", "Subtotal", "Discount", "Grand Total", "Received", "Balance Due", "Expense", "Profit", "Status"].map((h) => {
+                          const right = ["Subtotal", "Discount", "Grand Total", "Received", "Balance Due", "Expense", "Profit"].includes(h);
+                          return (
+                            <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"} whitespace-nowrap`} style={DT.thStyle}>
+                              {h}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredInvoices.map((inv, idx) => {
+                        const st = STATUS_STYLES[inv.payment_status] || STATUS_STYLES.unpaid;
+                        return (
+                          <tr key={inv.id} className={DT.row}>
+                            <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                            <td className={DT.tdDense}>
+                              <span className="font-mono text-[11px] font-extrabold" style={{ color: "var(--blue-deeper)" }}>{inv.invoice_number}</span>
+                            </td>
+                            <td className={`${DT.tdDense} ${DT.cellBody} whitespace-nowrap`} style={{ color: "var(--gray-900)" }}>
+                              {formatDate(inv.invoice_date)}
+                            </td>
+                            <td className={DT.tdDense}>
+                              <div className={DT.cellPrimary} style={{ color: "var(--gray-900)" }}>{inv.client_name}</div>
+                              {inv.client_phone && <div className={`${DT.cellBody} mt-0.5`} style={{ color: "var(--gray-800)" }}>{inv.client_phone}</div>}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right text-[13.5px] font-semibold`} style={{ color: "var(--gray-700)" }}>{formatCurrency(inv.subtotal)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right text-[13.5px] font-semibold`} style={{ color: "var(--red)" }}>
+                              {inv.discount_amount > 0 ? `− ${formatCurrency(inv.discount_amount)}` : "—"}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: "var(--gray-900)" }}>{formatCurrency(inv.grand_total)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: "var(--green)" }}>{formatCurrency(inv.amount_received)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`}
+                              style={{ color: inv.balance_due > 0 ? "var(--red)" : "var(--green)" }}>
+                              {formatCurrency(inv.balance_due)}
+                            </td>
+                            {(() => {
+                              const exp = expenseByInvoice[inv.id] ?? 0;
+                              const profit = Number(inv.grand_total) - exp;
+                              return (
+                                <>
+                                  <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: exp > 0 ? "var(--red)" : "var(--gray-300)" }}>
+                                    {exp > 0 ? formatCurrency(exp) : "—"}
+                                  </td>
+                                  <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`} style={{ color: profit >= 0 ? "var(--green)" : "var(--red)" }}>
+                                    {formatCurrency(profit)}
+                                  </td>
+                                </>
+                              );
+                            })()}
+                            <td className={DT.tdDense}>
+                              <span className={DT.badge} style={{ background: st.bg, color: st.color }}>{st.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--gray-50)" }}>
+                        <td colSpan={4} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                          Total ({filteredInvoices.length} invoices)
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[13.5px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-900)" }}>
+                          {formatCurrency(filteredInvoices.reduce((s, i) => s + Number(i.subtotal), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>
+                          {formatCurrency(filteredInvoices.reduce((s, i) => s + Number(i.discount_amount), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-900)" }}>{formatCurrency(totalRevenue)}</td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>{formatCurrency(totalCollected)}</td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>{formatCurrency(totalDue)}</td>
+                        {(() => {
+                          const expTotal = filteredInvoices.reduce((s, i) => s + (expenseByInvoice[i.id] ?? 0), 0);
+                          const profitTotal = totalRevenue - expTotal;
+                          return (
+                            <>
+                              <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>{formatCurrency(expTotal)}</td>
+                              <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: profitTotal >= 0 ? "var(--green)" : "var(--red)" }}>{formatCurrency(profitTotal)}</td>
+                            </>
+                          );
+                        })()}
+                        <td className={`${DT.tdDense} border-t-2 border-[var(--gray-200)]`} />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TAB: CASH FLOW ────────────────────────────────── */}
+        {reportGenerated && activeTab === "cashflow" && (
+          <div>
+            {/* KPIs */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              <KpiCard label="Total Cash In" value={formatCurrency(totalCashIn)} color="var(--green)" sub={`${cashbook.filter((c) => c.type === "in").length} entries`} />
+              <KpiCard label="Total Cash Out" value={formatCurrency(totalCashOut)} color="var(--red)" sub={`${cashbook.filter((c) => c.type === "out").length} entries`} />
+              <KpiCard label="Net Cash Flow" value={formatCurrency(totalCashIn - totalCashOut)} color={totalCashIn - totalCashOut >= 0 ? "var(--green)" : "var(--red)"} />
+            </div>
+
+            <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+              {loading ? (
+                <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+              ) : cashbook.length === 0 ? (
+                <div className="py-14 text-center">
+                  <TrendingUp size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No cashbook entries for this period.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className={`${DT.table} min-w-[750px]`}>
+                    <thead>
+                      <tr>
+                        {["#", "Date", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => {
+                          const right = ["Cash In", "Cash Out", "Running Balance"].includes(h);
+                          return (
+                            <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"}`} style={DT.thStyle}>
+                              {h}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cashbookWithBal.map((entry, idx) => (
+                        <tr key={entry.id} className={DT.row}>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody} whitespace-nowrap`} style={{ color: "var(--gray-900)" }}>{formatDate(entry.date)}</td>
+                          <td className={DT.tdDense}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: entry.type === "in" ? "var(--green)" : "var(--red)" }} />
+                              <span className={DT.cellPrimary} style={{ color: "var(--gray-900)" }}>{entry.description}</span>
+                            </div>
+                          </td>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{entry.reference || "—"}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`}>
+                            <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: "var(--gray-100)", color: "var(--gray-900)" }}>{entry.method || "—"}</span>
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "in" ? "var(--green)" : "var(--gray-200)" }}>
+                            {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "out" ? "var(--red)" : "var(--gray-200)" }}>
+                            {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`}
+                            style={{ color: entry.runningBal >= 0 ? "var(--green)" : "var(--red)" }}>
+                            {formatCurrency(Math.abs(entry.runningBal))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--gray-50)" }}>
+                        <td colSpan={5} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                          Total ({cashbook.length} entries)
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>{formatCurrency(totalCashIn)}</td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>{formatCurrency(totalCashOut)}</td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`}
+                          style={{ color: cashbookWithBal.at(-1)?.runningBal ?? 0 >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {formatCurrency(Math.abs(cashbookWithBal.at(-1)?.runningBal ?? 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TAB: DAILY CASHBOOK ───────────────────────────── */}
+        {reportGenerated && activeTab === "dailycash" && (
+          <div>
+            {/* Daily KPIs */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              <KpiCard
+                label="Cash In"
+                value={formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                color="var(--green)"
+                sub={`${dailyCashbook.filter((c) => c.type === "in").length} entries`}
+              />
+              <KpiCard
+                label="Cash Out"
+                value={formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                color="var(--red)"
+                sub={`${dailyCashbook.filter((c) => c.type === "out").length} entries`}
+              />
+              <KpiCard
+                label="Net for Day"
+                value={formatCurrency(
+                  dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) -
+                  dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
+                )}
+                color={
+                  dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) >=
+                  dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
+                    ? "var(--green)" : "var(--red)"
+                }
+              />
+            </div>
+
+            <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+              {dailyLoading ? (
+                <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+              ) : dailyCashWithBal.length === 0 ? (
+                <div className="py-14 text-center">
+                  <TrendingDown size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No cashbook entries for {formatDate(dailyDate)}.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className={`${DT.table} min-w-[650px]`}>
+                    <thead>
+                      <tr>
+                        {["#", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => {
+                          const right = ["Cash In", "Cash Out", "Running Balance"].includes(h);
+                          return (
+                            <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"}`} style={DT.thStyle}>
+                              {h}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dailyCashWithBal.map((entry, idx) => (
+                        <tr key={entry.id} className={DT.row}>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                          <td className={DT.tdDense}>
+                            <div className="flex items-center gap-2">
+                              <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: entry.type === "in" ? "var(--green)" : "var(--red)" }} />
+                              <span className={DT.cellPrimary} style={{ color: "var(--gray-900)" }}>{entry.description}</span>
+                            </div>
+                          </td>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{entry.reference || "—"}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`}>
+                            <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: "var(--gray-100)", color: "var(--gray-900)" }}>{entry.method || "—"}</span>
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "in" ? "var(--green)" : "var(--gray-200)" }}>
+                            {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "out" ? "var(--red)" : "var(--gray-200)" }}>
+                            {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                          </td>
+                          <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`}
+                            style={{ color: entry.runningBal >= 0 ? "var(--green)" : "var(--red)" }}>
+                            {formatCurrency(Math.abs(entry.runningBal))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--gray-50)" }}>
+                        <td colSpan={4} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                          Day Total ({dailyCashWithBal.length} entries)
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>
+                          {formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>
+                          {formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`}
+                          style={{ color: (dailyCashWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {formatCurrency(Math.abs(dailyCashWithBal.at(-1)?.runningBal ?? 0))}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TAB: DAILY PARTIES ────────────────────────────── */}
+        {reportGenerated && activeTab === "dailyparties" && (
+          <div>
+            {/* Daily parties KPIs */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+              <KpiCard label="Invoices Today" value={String(dailyInvoices.length)} color="var(--blue-deeper)" />
+              <KpiCard label="Total Billed" value={formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.grand_total), 0))} color="var(--gray-900)" />
+              <KpiCard label="Collected" value={formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.amount_received), 0))} color="var(--green)" />
+              <KpiCard label="Balance Due" value={formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.balance_due), 0))} color="var(--red)" />
+            </div>
+
+            <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+              {dailyLoading ? (
+                <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+              ) : dailyInvoices.length === 0 ? (
+                <div className="py-14 text-center">
+                  <Users size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No invoices for {formatDate(dailyDate)}.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className={`${DT.table} min-w-[750px]`}>
+                    <thead>
+                      <tr>
+                        {["#", "Invoice No", "Party Name", "Job / Description", "Invoice Amount", "Received", "Balance", "Status"].map((h) => {
+                          const right = ["Invoice Amount", "Received", "Balance"].includes(h);
+                          return (
+                            <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"}`} style={DT.thStyle}>
+                              {h}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dailyInvoices.map((inv, idx) => {
+                        const st = STATUS_STYLES[inv.payment_status] || STATUS_STYLES.unpaid;
+                        return (
+                          <tr key={inv.id} className={DT.row}>
+                            <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                            <td className={DT.tdDense}>
+                              <span className="font-mono text-[11px] font-extrabold" style={{ color: "var(--blue-deeper)" }}>{inv.invoice_number}</span>
+                            </td>
+                            <td className={DT.tdDense}>
+                              <div className={DT.cellPrimary} style={{ color: "var(--gray-900)" }}>{inv.client_name}</div>
+                              {inv.client_phone && <div className={`${DT.cellBody} mt-0.5`} style={{ color: "var(--gray-800)" }}>{inv.client_phone}</div>}
+                            </td>
+                            <td className={DT.tdDense}>
+                              <div className={DT.cellBody} style={{ color: "var(--gray-700)" }}>{inv.job_name || "—"}</div>
+                              {inv.job_location && <div className={`${DT.cellBody} mt-0.5`} style={{ color: "var(--gray-800)" }}>{inv.job_location}</div>}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: "var(--gray-900)" }}>{formatCurrency(inv.grand_total)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: "var(--green)" }}>{formatCurrency(inv.amount_received)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`}
+                              style={{ color: inv.balance_due > 0 ? "var(--red)" : "var(--green)" }}>
+                              {formatCurrency(inv.balance_due)}
+                            </td>
+                            <td className={DT.tdDense}>
+                              <span className={DT.badge} style={{ background: st.bg, color: st.color }}>{st.label}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--gray-50)" }}>
+                        <td colSpan={4} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                          Day Total ({dailyInvoices.length} invoices)
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-900)" }}>
+                          {formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.grand_total), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>
+                          {formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.amount_received), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>
+                          {formatCurrency(dailyInvoices.reduce((s, i) => s + Number(i.balance_due), 0))}
+                        </td>
+                        <td className={`${DT.tdDense} border-t-2 border-[var(--gray-200)]`} />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── TAB: PAYMENT METHOD REPORT ────────────────────── */}
+        {reportGenerated && activeTab === "paymentmethod" && (
+          <div>
+            {methodFilter === "all" ? (
+              <div className="bg-white rounded-[14px] border border-[var(--gray-100)] py-16 text-center" style={{ boxShadow: "var(--shadow-sm)" }}>
+                <Wallet size={36} className="mx-auto mb-3" style={{ color: "var(--gray-200)" }} />
+                <p className="text-[13px] font-semibold mb-1" style={{ color: "var(--gray-900)" }}>Select a Payment Method</p>
+                <p className="text-[12px]" style={{ color: "var(--gray-800)" }}>Choose a payment method in the filters panel, then generate the report.</p>
+              </div>
+            ) : loading ? (
+              <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <KpiCard label="Opening Balance" value={formatCurrency(methodOpeningBalance)} color="var(--blue-deeper)" sub="Before this period" />
+                  <KpiCard label="Total Cash In" value={formatCurrency(methodCashIn)} color="var(--green)" sub={`${methodCashbook.filter((c) => c.type === "in").length} entries`} />
+                  <KpiCard label="Total Cash Out" value={formatCurrency(methodCashOut)} color="var(--red)" sub={`${methodCashbook.filter((c) => c.type === "out").length} entries`} />
+                  <KpiCard label="Closing Balance" value={formatCurrency(methodOpeningBalance + methodCashIn - methodCashOut)} color={(methodOpeningBalance + methodCashIn - methodCashOut) >= 0 ? "var(--green)" : "var(--red)"} sub={methodFilter} />
+                </div>
+
+                <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+                  {methodCashbookWithBal.length === 0 ? (
+                    <div className="py-14 text-center">
+                      <Wallet size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                      <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No transactions for {methodFilter} in this period.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className={`${DT.table} min-w-[750px]`}>
+                        <thead>
+                          <tr>
+                            {["#", "Date", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => {
+                              const right = ["Cash In", "Cash Out", "Running Balance"].includes(h);
+                              return (
+                                <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"}`} style={DT.thStyle}>{h}</th>
+                              );
+                            })}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {methodCashbookWithBal.map((entry, idx) => (
+                            <tr key={entry.id} className={DT.row}>
+                              <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                              <td className={`${DT.tdDense} ${DT.cellBody} whitespace-nowrap`} style={{ color: "var(--gray-900)" }}>{formatDate(entry.date)}</td>
+                              <td className={DT.tdDense}>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: entry.type === "in" ? "var(--green)" : "var(--red)" }} />
+                                  <span className={DT.cellPrimary} style={{ color: "var(--gray-900)" }}>{entry.description}</span>
+                                </div>
+                              </td>
+                              <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{entry.reference || "—"}</td>
+                              <td className={`${DT.tdDense} ${DT.cellBody}`}>
+                                <span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: "var(--gray-100)", color: "var(--gray-900)" }}>{normalizePaymentMethod(entry.method)}</span>
+                              </td>
+                              <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "in" ? "var(--green)" : "var(--gray-200)" }}>
+                                {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                              </td>
+                              <td className={`${DT.tdDense} font-mono text-right font-bold text-[15px]`} style={{ color: entry.type === "out" ? "var(--red)" : "var(--gray-200)" }}>
+                                {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                              </td>
+                              <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`}
+                                style={{ color: entry.runningBal >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {formatCurrency(Math.abs(entry.runningBal))}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr style={{ background: "var(--gray-50)" }}>
+                            <td colSpan={5} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
+                              Total ({methodCashbook.length} entries) — {methodFilter}
+                            </td>
+                            <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>{formatCurrency(methodCashIn)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>{formatCurrency(methodCashOut)}</td>
+                            <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`}
+                              style={{ color: (methodCashbookWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                              {formatCurrency(Math.abs(methodCashbookWithBal.at(-1)?.runningBal ?? 0))}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── TAB: EXPENSE REPORT ───────────────────────────── */}
+        {reportGenerated && activeTab === "expense" && (
+          <div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+              <KpiCard label="Total Expenses" value={formatCurrency(expenseTotal)} color="var(--red)" sub={`${expenses.length} entries`} />
+              <KpiCard label="Entries" value={String(expenses.length)} color="var(--blue-deeper)" />
+              <KpiCard label="Period" value={`${formatDate(fromDate)} — ${formatDate(toDate)}`} color="var(--gray-900)" />
+            </div>
+            <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
+              {loading ? (
+                <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
+              ) : expenses.length === 0 ? (
+                <div className="py-14 text-center">
+                  <TrendingDown size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No expenses found for this period.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className={`${DT.table} min-w-[850px]`}>
+                    <thead>
+                      <tr>
+                        {["#", "Expense No", "Date", "Category", "Invoice", "Method", "Amount"].map((h) => {
+                          const right = h === "Amount";
+                          return <th key={h} className={`${DT.thDense} ${right ? "text-right" : "text-left"} whitespace-nowrap`} style={DT.thStyle}>{h}</th>;
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {expenses.map((e, idx) => (
+                        <tr key={e.id} className={DT.row}>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody} font-mono`} style={{ color: "var(--blue-deeper)" }}>{e.expense_number || "—"}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody} whitespace-nowrap`} style={{ color: "var(--gray-900)" }}>{formatDate(e.date)}</td>
+                          <td className={`${DT.tdDense} ${DT.cellPrimary}`} style={{ color: "var(--gray-900)" }}>{e.category || "—"}</td>
+                          <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-700)" }}>{e.invoice_number || "—"}</td>
+                          <td className={DT.tdDense}><span className="px-2 py-0.5 rounded-full text-[10.5px] font-semibold" style={{ background: "var(--gray-100)", color: "var(--gray-900)" }}>{e.method}</span></td>
+                          <td className={`${DT.tdDense} font-mono text-right font-extrabold text-[15px]`} style={{ color: "var(--red)" }}>{formatCurrency(e.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: "var(--gray-50)" }}>
+                        <td colSpan={6} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>Total ({expenses.length} entries)</td>
+                        <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>{formatCurrency(expenseTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Print Layout (A4 — flex column pins footer to page bottom) ── */}
+      <div className="ledger-a4-print-only" style={{ background: "#fff", fontFamily: "Arial, sans-serif" }}>
+        {reportGenerated && activeTab ? (
+          <>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <PdfPrintBanner subtitle="Reports" />
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 10px 8px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: "#555" }}>
+            {activeTab === "dailycash" || activeTab === "dailyparties"
+              ? `Date: ${formatDate(dailyDate)}`
+              : `Period: ${formatDate(fromDate)} — ${formatDate(toDate)}`}
+            {accountFilter !== "all" && activeTab !== "paymentmethod" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
+            {activeTab === "paymentmethod" && methodFilter !== "all" && <span style={{ marginLeft: 8, color: "#888" }}>· Method: {methodFilter}</span>}
+          </div>
+          <div style={{ fontWeight: 900, color: "#14532d", fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>
+            {{ overview: "Overview Report", account: "Account Statement", invoices: "Invoice Report", cashflow: "Cash Flow Report", dailycash: "Daily Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report" }[activeTab]}
+          </div>
+        </div>
+
+        {/* Print summary */}
+        {(activeTab === "overview" || activeTab === "invoices") && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 18 }}>
+            {[
+              { label: "Total Invoices", val: String(filteredInvoices.length), color: "#14532d" },
+              { label: "Grand Total", val: formatCurrency(totalRevenue), color: "#111" },
+              { label: "Amount Received", val: formatCurrency(totalCollected), color: "#16a34a" },
+              { label: "Balance Due", val: formatCurrency(totalDue), color: "#dc2626" },
+            ].map((c) => (
+              <div key={c.label} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 4 }}>{c.label}</div>
+                <div style={{ fontSize: 15, fontWeight: 900, color: c.color, fontFamily: "monospace" }}>{c.val}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Print table for invoices */}
+        {(activeTab === "invoices" || activeTab === "overview") && filteredInvoices.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead>
+              <tr style={{ background: "#14532d" }}>
+                {["#", "Invoice No", "Date", "Client", "Grand Total", "Received", "Balance Due", "Expense", "Profit", "Status"].map((h) => (
+                  <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredInvoices.map((inv, idx) => (
+                <tr key={inv.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 8px", color: "#999", fontSize: 10 }}>{idx + 1}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{inv.invoice_number}</td>
+                  <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(inv.invoice_date)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 600 }}>{inv.client_name}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right" }}>{formatCurrency(inv.grand_total)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, fontFamily: "monospace", textAlign: "right", color: "#16a34a" }}>{formatCurrency(inv.amount_received)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right", color: inv.balance_due > 0 ? "#dc2626" : "#16a34a" }}>{formatCurrency(inv.balance_due)}</td>
+                  {(() => {
+                    const exp = expenseByInvoice[inv.id] ?? 0;
+                    const profit = Number(inv.grand_total) - exp;
+                    return (
+                      <>
+                        <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right", color: exp > 0 ? "#dc2626" : "#ccc" }}>{exp > 0 ? formatCurrency(exp) : "—"}</td>
+                        <td style={{ padding: "6px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", color: profit >= 0 ? "#16a34a" : "#dc2626" }}>{formatCurrency(profit)}</td>
+                      </>
+                    );
+                  })()}
+                  <td style={{ padding: "6px 8px" }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase",
+                      background: inv.payment_status === "paid" ? "#dcfce7" : inv.payment_status === "partial" ? "#fff7ed" : "#fef2f2",
+                      color: inv.payment_status === "paid" ? "#16a34a" : inv.payment_status === "partial" ? "#ea580c" : "#dc2626" }}>
+                      {inv.payment_status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
+                <td colSpan={4} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>TOTAL — {filteredInvoices.length} Invoice{filteredInvoices.length !== 1 ? "s" : ""}</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", fontSize: 13 }}>{formatCurrency(totalRevenue)}</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", fontSize: 13, color: "#16a34a" }}>{formatCurrency(totalCollected)}</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", fontSize: 13, color: "#dc2626" }}>{formatCurrency(totalDue)}</td>
+                {(() => {
+                  const expTotal = filteredInvoices.reduce((s, i) => s + (expenseByInvoice[i.id] ?? 0), 0);
+                  const profitTotal = totalRevenue - expTotal;
+                  return (
+                    <>
+                      <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", fontSize: 13, color: "#dc2626" }}>{formatCurrency(expTotal)}</td>
+                      <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", textAlign: "right", fontSize: 13, color: profitTotal >= 0 ? "#16a34a" : "#dc2626" }}>{formatCurrency(profitTotal)}</td>
+                    </>
+                  );
+                })()}
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        )}
+
+        {/* Print table for cashflow */}
+        {activeTab === "cashflow" && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead>
+              <tr style={{ background: "#14532d" }}>
+                {["#", "Date", "Description", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
+                  <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {cashbookWithBal.map((entry, idx) => (
+                <tr key={entry.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
+                  <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(entry.date)}</td>
+                  <td style={{ padding: "6px 8px" }}>{entry.description}</td>
+                  <td style={{ padding: "6px 8px", color: "#666" }}>{entry.method || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, color: entry.type === "in" ? "#16a34a" : "#999" }}>
+                    {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, color: entry.type === "out" ? "#dc2626" : "#999" }}>
+                    {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 800, color: entry.runningBal >= 0 ? "#16a34a" : "#dc2626" }}>
+                    {formatCurrency(Math.abs(entry.runningBal))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
+                <td colSpan={4} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>TOTAL</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#16a34a", fontSize: 13 }}>{formatCurrency(totalCashIn)}</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#dc2626", fontSize: 13 }}>{formatCurrency(totalCashOut)}</td>
+                <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", fontSize: 13 }}>{formatCurrency(Math.abs(cashbookWithBal.at(-1)?.runningBal ?? 0))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        )}
+
+        {/* Print table for daily cashbook (single day) */}
+        {activeTab === "dailycash" && (
+          dailyCashWithBal.length === 0 ? (
+            <p style={{ fontSize: 12, color: "#666", padding: "12px 10px" }}>
+              No cashbook entries for {formatDate(dailyDate)}.
+            </p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ background: "#14532d" }}>
+                  {["#", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
+                    <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {dailyCashWithBal.map((entry, idx) => (
+                  <tr key={entry.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
+                    <td style={{ padding: "6px 8px" }}>{entry.description}</td>
+                    <td style={{ padding: "6px 8px", color: "#666" }}>{entry.reference || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: "#666" }}>{entry.method || "—"}</td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, color: entry.type === "in" ? "#16a34a" : "#999" }}>
+                      {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                    </td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, color: entry.type === "out" ? "#dc2626" : "#999" }}>
+                      {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                    </td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 800, color: entry.runningBal >= 0 ? "#16a34a" : "#dc2626" }}>
+                      {formatCurrency(Math.abs(entry.runningBal))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
+                  <td colSpan={4} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>
+                    Day total — {dailyCashWithBal.length} {dailyCashWithBal.length !== 1 ? "entries" : "entry"}
+                  </td>
+                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#16a34a", fontSize: 13 }}>
+                    {formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                  </td>
+                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#dc2626", fontSize: 13 }}>
+                    {formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                  </td>
+                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", fontSize: 13, color: (dailyCashWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "#16a34a" : "#dc2626" }}>
+                    {formatCurrency(Math.abs(dailyCashWithBal.at(-1)?.runningBal ?? 0))}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )
+        )}
+
+        {/* Print: daily parties */}
+        {activeTab === "dailyparties" && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead>
+              <tr style={{ background: "#14532d" }}>
+                {["#", "Invoice No", "Party Name", "Job / Description", "Invoice Amount", "Received", "Balance", "Status"].map((h) => (
+                  <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {dailyInvoices.map((inv, idx) => (
+                <tr key={inv.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{inv.invoice_number}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 600 }}>{inv.client_name}</td>
+                  <td style={{ padding: "6px 8px", color: "#666" }}>{inv.job_name || "—"}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right" }}>{formatCurrency(inv.grand_total)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, fontFamily: "monospace", textAlign: "right", color: "#16a34a" }}>{formatCurrency(inv.amount_received)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right", color: inv.balance_due > 0 ? "#dc2626" : "#16a34a" }}>{formatCurrency(inv.balance_due)}</td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase",
+                      background: inv.payment_status === "paid" ? "#dcfce7" : inv.payment_status === "partial" ? "#fff7ed" : "#fef2f2",
+                      color: inv.payment_status === "paid" ? "#16a34a" : inv.payment_status === "partial" ? "#ea580c" : "#dc2626" }}>
+                      {inv.payment_status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* Print: account statement */}
+        {activeTab === "account" && accStatementWithBal.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead>
+              <tr style={{ background: "#14532d" }}>
+                {["Date", "Document #", "Description", "Debit", "Credit", "Balance", "Method"].map((h) => (
+                  <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {accStatementWithBal.map((r, idx) => (
+                <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(r.date)}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{r.doc}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.desc}</td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, textAlign: "right", color: r.debit > 0 ? "#111" : "#ccc" }}>
+                    {r.debit > 0 ? formatCurrency(r.debit) : "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, textAlign: "right", color: r.credit > 0 ? "#16a34a" : "#ccc" }}>
+                    {r.credit > 0 ? formatCurrency(r.credit) : "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 800, textAlign: "right", color: r.balance > 0 ? "#dc2626" : "#16a34a" }}>
+                    {formatCurrency(Math.abs(r.balance))}
+                  </td>
+                  <td style={{ padding: "6px 8px", color: "#666" }}>{r.method}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {/* Print: payment method report */}
+        {activeTab === "paymentmethod" && (
+          methodCashbookWithBal.length === 0 ? (
+            <p style={{ fontSize: 12, color: "#666", padding: "12px 10px" }}>
+              No transactions for {methodFilter} between {formatDate(fromDate)} and {formatDate(toDate)}.
+            </p>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 18 }}>
+                {[
+                  { label: "Opening Balance", val: formatCurrency(methodOpeningBalance), color: "#1d4ed8" },
+                  { label: "Total Cash In", val: formatCurrency(methodCashIn), color: "#16a34a" },
+                  { label: "Total Cash Out", val: formatCurrency(methodCashOut), color: "#dc2626" },
+                  { label: "Closing Balance", val: formatCurrency(methodOpeningBalance + methodCashIn - methodCashOut), color: (methodOpeningBalance + methodCashIn - methodCashOut) >= 0 ? "#16a34a" : "#dc2626" },
+                ].map((c) => (
+                  <div key={c.label} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", textAlign: "center" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#999", textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 4 }}>{c.label}</div>
+                    <div style={{ fontSize: 15, fontWeight: 900, color: c.color, fontFamily: "monospace" }}>{c.val}</div>
+                  </div>
+                ))}
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: "#14532d" }}>
+                    {["#", "Date", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
+                      <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {methodCashbookWithBal.map((entry, idx) => (
+                    <tr key={entry.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                      <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
+                      <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(entry.date)}</td>
+                      <td style={{ padding: "6px 8px" }}>{entry.description}</td>
+                      <td style={{ padding: "6px 8px", color: "#666" }}>{entry.reference || "—"}</td>
+                      <td style={{ padding: "6px 8px", color: "#666" }}>{normalizePaymentMethod(entry.method)}</td>
+                      <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, textAlign: "right", color: entry.type === "in" ? "#16a34a" : "#999" }}>
+                        {entry.type === "in" ? formatCurrency(entry.amount) : "—"}
+                      </td>
+                      <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, textAlign: "right", color: entry.type === "out" ? "#dc2626" : "#999" }}>
+                        {entry.type === "out" ? formatCurrency(entry.amount) : "—"}
+                      </td>
+                      <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 800, textAlign: "right", color: entry.runningBal >= 0 ? "#16a34a" : "#dc2626" }}>
+                        {formatCurrency(Math.abs(entry.runningBal))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
+                    <td colSpan={5} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>
+                      Total — {methodCashbookWithBal.length} {methodCashbookWithBal.length !== 1 ? "entries" : "entry"} · {methodFilter}
+                    </td>
+                    <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#16a34a", fontSize: 13, textAlign: "right" }}>{formatCurrency(methodCashIn)}</td>
+                    <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#dc2626", fontSize: 13, textAlign: "right" }}>{formatCurrency(methodCashOut)}</td>
+                    <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", fontSize: 13, textAlign: "right", color: (methodCashbookWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "#16a34a" : "#dc2626" }}>
+                      {formatCurrency(Math.abs(methodCashbookWithBal.at(-1)?.runningBal ?? 0))}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </>
+          )
+        )}
+
+        {/* Print: expense report */}
+        {activeTab === "expense" && (
+          expenses.length === 0 ? (
+            <p style={{ fontSize: 12, color: "#666", padding: "12px 10px" }}>
+              No expenses between {formatDate(fromDate)} and {formatDate(toDate)}.
+            </p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ background: "#14532d" }}>
+                  {["#", "Expense No", "Date", "Category", "Invoice", "Method", "Amount"].map((h) => (
+                    <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: h === "Amount" ? "right" : "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {expenses.map((e, idx) => (
+                  <tr key={e.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", color: "#14532d", fontWeight: 700 }}>{e.expense_number || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(e.date)}</td>
+                    <td style={{ padding: "6px 8px", fontWeight: 600 }}>{e.category || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: "#666" }}>{e.invoice_number || "—"}</td>
+                    <td style={{ padding: "6px 8px", color: "#666" }}>{e.method}</td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 800, textAlign: "right", color: "#dc2626" }}>{formatCurrency(e.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
+                  <td colSpan={6} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>TOTAL — {expenses.length} {expenses.length !== 1 ? "entries" : "entry"}</td>
+                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#dc2626", fontSize: 13, textAlign: "right" }}>{formatCurrency(expenseTotal)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )
+        )}
+
+        </div>
+        <PrintFooter />
+          </>
+        ) : (
+          <div style={{ padding: 32, textAlign: "center", color: "#888", fontSize: 12 }}>
+            Generate a report on screen, then use Print / PDF.
+          </div>
+        )}
+      </div>
+    </>
+  );
+}

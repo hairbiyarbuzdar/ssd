@@ -1,0 +1,3 @@
+{
+  "/(dashboard)/quote/page": "app/(dashboard)/quote/page.js"
+}

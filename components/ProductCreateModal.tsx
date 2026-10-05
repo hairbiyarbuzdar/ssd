@@ -1,0 +1,187 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { X, Loader2 } from "lucide-react";
+import { db } from "@/lib/db";
+import { showToast } from "@/components/Toast";
+
+export type CreatedProduct = {
+  id: string;
+  name: string;
+  sale_price: number;
+  description?: string | null;
+  pricing_type?: string | null;
+};
+
+// Generates the next sequential numeric product code based on existing products.
+export function nextProductCode(existing: { code: string | null }[]): string {
+  let max = 0;
+  for (const p of existing) {
+    const m = String(p.code ?? "").match(/(\d+)/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return String(max + 1);
+}
+
+export function ProductCreateModal({
+  initialName,
+  existingProducts,
+  onClose,
+  onCreated,
+}: {
+  initialName: string;
+  existingProducts: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null }[];
+  onClose: () => void;
+  onCreated: (p: CreatedProduct) => void;
+}) {
+  const [fName, setFName] = useState(initialName);
+  const [fCode, setFCode] = useState(() => nextProductCode(existingProducts));
+  const [fDescription, setFDescription] = useState("");
+  const [fCost, setFCost] = useState("");
+  const [fSale, setFSale] = useState("");
+  const [fPricingType, setFPricingType] = useState<"sqft" | "standalone">("sqft");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !saving) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, saving]);
+
+  function handleNameChange(name: string) {
+    setFName(name);
+  }
+
+  async function handleSave() {
+    const trimmed = fName.trim();
+    if (!trimmed) { showToast("Enter product name", "err"); return; }
+    setSaving(true);
+    const payload = {
+      code: fCode || nextProductCode(existingProducts),
+      name: trimmed,
+      description: fDescription.trim(),
+      cost_price: parseFloat(fCost) || 0,
+      sale_price: parseFloat(fSale) || 0,
+      pricing_type: fPricingType,
+    };
+    const { data, error } = await db.from("products").insert(payload).select("id").single();
+    setSaving(false);
+    if (error || !data?.id) { showToast(error?.message || "Could not save product", "err"); return; }
+    showToast("Product saved", "ok");
+    onCreated({ id: String(data.id), name: payload.name, sale_price: payload.sale_price, description: payload.description, pricing_type: payload.pricing_type });
+  }
+
+  const inputStyle = { borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" };
+
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-start justify-center backdrop-blur-sm pt-10 px-4 overflow-y-auto"
+      style={{ background: "rgba(10,30,50,.45)" }}
+      onClick={() => { if (!saving) onClose(); }}
+    >
+      <div className="bg-white rounded-[20px] w-[480px] max-w-full overflow-hidden animate-slide-up"
+        style={{ boxShadow: "var(--shadow-lg)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--gray-100)]">
+          <h2 className="text-[15px] font-bold">Add Product</h2>
+          <button onClick={onClose} disabled={saving}
+            className="w-7 h-7 rounded-full flex items-center justify-center border-none cursor-pointer disabled:opacity-50"
+            style={{ background: "var(--gray-100)", color: "var(--gray-800)" }}>
+            <X size={12} />
+          </button>
+        </div>
+        <div className="p-5 grid grid-cols-2 gap-3.5">
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+              Product Name <span style={{ color: "var(--red)" }}>*</span>
+            </label>
+            <input value={fName} onChange={(e) => handleNameChange(e.target.value)}
+              placeholder="e.g. Billboard Print, Shop Sign Acrylic"
+              className="border-[1.5px] rounded-[9px] px-3 py-2 text-[13px] outline-none" style={inputStyle} autoFocus />
+          </div>
+
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+              Description <span className="font-normal normal-case" style={{ color: "var(--gray-800)" }}>(optional)</span>
+            </label>
+            <textarea
+              value={fDescription}
+              onChange={(e) => setFDescription(e.target.value)}
+              placeholder="e.g. Outdoor vinyl, UV print, lamination options…"
+              rows={3}
+              className="border-[1.5px] rounded-[9px] px-3 py-2 text-[13px] outline-none resize-y min-h-[72px]"
+              style={inputStyle}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Pricing Type</label>
+            <div className="flex border-[1.5px] rounded-[9px] overflow-hidden" style={{ borderColor: "var(--gray-200)" }}>
+              <button type="button" onClick={() => setFPricingType("sqft")}
+                className="flex-1 py-2 text-[12px] font-semibold border-none cursor-pointer transition-all"
+                style={{ background: fPricingType === "sqft" ? "var(--blue-deeper)" : "var(--gray-50)", color: fPricingType === "sqft" ? "#fff" : "var(--gray-500)" }}>
+                Sqft (Width × Height)
+              </button>
+              <button type="button" onClick={() => setFPricingType("standalone")}
+                className="flex-1 py-2 text-[12px] font-semibold border-none cursor-pointer transition-all"
+                style={{ background: fPricingType === "standalone" ? "#B45309" : "var(--gray-50)", color: fPricingType === "standalone" ? "#fff" : "var(--gray-500)" }}>
+                Standalone (Fixed Price)
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Item Code</label>
+            <input value={fCode} onChange={(e) => setFCode(e.target.value)}
+              placeholder="Auto-generated"
+              className="border-[1.5px] rounded-[9px] px-3 py-2 text-[13px] outline-none font-mono font-bold"
+              style={{ ...inputStyle, background: "var(--blue-pale)", color: "var(--blue-deeper)" }} />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+              Cost Price{fPricingType === "sqft" ? " / Sqft" : ""} (Rs)
+            </label>
+            <input type="number" value={fCost} onChange={(e) => setFCost(e.target.value)}
+              placeholder="0" min="0"
+              className="border-[1.5px] rounded-[9px] px-3 py-2 text-[13px] outline-none font-mono" style={inputStyle} />
+          </div>
+
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
+              Sale Price{fPricingType === "sqft" ? " / Sqft" : ""} (Rs)
+            </label>
+            <input type="number" value={fSale} onChange={(e) => setFSale(e.target.value)}
+              placeholder="0" min="0"
+              className="border-[1.5px] rounded-[9px] px-3 py-2 text-[13px] outline-none font-mono" style={inputStyle} />
+          </div>
+
+          {fCost && fSale && parseFloat(fSale) > 0 && (
+            <div className="col-span-2 flex items-center gap-2 px-3 py-2 rounded-[9px]"
+              style={{ background: "var(--green-light)", border: "1.5px solid rgba(14,173,106,.2)" }}>
+              <span className="text-[11px] font-semibold" style={{ color: "var(--green)" }}>
+                Margin: {Math.round(((parseFloat(fSale) - parseFloat(fCost)) / parseFloat(fSale)) * 100)}% —
+                Rs {Math.round(parseFloat(fSale) - parseFloat(fCost))} profit {fPricingType === "sqft" ? "per sqft" : "per unit"}
+              </span>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-[var(--gray-100)]">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] cursor-pointer bg-white disabled:opacity-50"
+            style={{ borderColor: "var(--gray-200)", color: "var(--blue-deeper)" }}>
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-60 inline-flex items-center gap-1.5"
+            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))" }}>
+            {saving ? <Loader2 size={13} className="animate-spin" /> : null}
+            {saving ? "Saving…" : "Save Product"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

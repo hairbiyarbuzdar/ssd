@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(grep -v \"^$\")",
+      "Read(//home/junayd/Panaflex/lib/**)",
+      "Bash(grep -E \"\\\\.\\(ts|tsx\\)$\")",
+      "Bash(npx next *)",
+      "Bash(patch -p1 --dry-run --fuzz=3)"
+    ],
+    "additionalDirectories": [
+      "/home/junayd/Projects/Panaflex/Clean Panaflex/components",
+      "/home/junayd/Projects/Panaflex/Clean Panaflex/app/(dashboard)/payment-methods",
+      "/home/junayd/Projects/Panaflex/Clean Panaflex/app/(dashboard)",
+      "/home/junayd/Projects/Panaflex/Clean Panaflex/lib"
+    ]
+  }
+}

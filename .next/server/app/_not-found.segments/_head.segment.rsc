@@ -1,0 +1,6 @@
+1:"$Sreact.fragment"
+2:I[19986,["/_next/static/chunks/0nxb1negx1nar.js","/_next/static/chunks/0htkw0cg73j_4.js"],"ViewportBoundary"]
+3:I[19986,["/_next/static/chunks/0nxb1negx1nar.js","/_next/static/chunks/0htkw0cg73j_4.js"],"MetadataBoundary"]
+4:"$Sreact.suspense"
+5:I[70838,["/_next/static/chunks/0nxb1negx1nar.js","/_next/static/chunks/0htkw0cg73j_4.js"],"IconMark"]
+0:{"rsc":["$","$1","h",{"children":[["$","meta",null,{"name":"robots","content":"noindex"}],["$","$L2",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","div",null,{"hidden":true,"children":["$","$L3",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"S.S.D — Business Management"}],["$","meta","1",{"name":"description","content":"S.S.D management system"}],["$","link","2",{"rel":"icon","href":"/favicon.ico?favicon.0.w29_9ybdug9.ico","sizes":"32x32","type":"image/x-icon"}],["$","link","3",{"rel":"icon","href":"/icon.svg?icon.0e69x~u.5v3j-.svg","sizes":"any","type":"image/svg+xml"}],["$","$L5","4",{}]]}]}]}],["$","meta",null,{"name":"next-size-adjust","content":""}]]}],"isPartial":false,"staleTime":300,"varyParams":null,"buildId":"PVpFs24JBTrzf9PlaauvP"}

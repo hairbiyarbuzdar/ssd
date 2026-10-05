@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+:root {
+  /* S.S.D — white base with light green accents */
+  --blue: #15803d;
+  --blue-dark: #166534;
+  --blue-deeper: #14532d;
+  --blue-light: #bbf7d0;
+  --blue-pale: #f0fdf4;
+  --accent-green: #bbf7d0;
+  --white: #FFFFFF;
+  --bg: #FFFFFF;
+  --gray-50: #F8FAFB;
+  --gray-100: #EEF2F6;
+  --gray-200: #DDE5ED;
+  --gray-300: #B8CCDA;
+  --gray-400: #88A8BC;
+  --gray-500: #5A8399;
+  --gray-600: #3D677E;
+  --gray-700: #254D62;
+  --gray-900: #0C2433;
+  --green: #0EAD6A;
+  --green-light: #E6F9F1;
+  --orange: #F59E0B;
+  --orange-light: #FFF8E6;
+  --red: #E84040;
+  --red-light: #FFF0F0;
+  --purple: #7C5CFC;
+  --purple-light: #F0EDFF;
+  --shadow-xs: 0 1px 3px rgba(0,0,0,.06);
+  --shadow-sm: 0 2px 8px rgba(20,83,45,.08), 0 1px 3px rgba(0,0,0,.04);
+  --shadow: 0 4px 20px rgba(20,83,45,.12), 0 2px 8px rgba(0,0,0,.05);
+  --shadow-lg: 0 12px 40px rgba(20,83,45,.16), 0 4px 16px rgba(0,0,0,.08);
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-xs: 6px;
+  --sidebar-w: 260px;
+  --header-h: 154px;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--gray-900);
+  --color-primary: var(--blue);
+  --color-primary-dark: var(--blue-dark);
+  --color-primary-deeper: var(--blue-deeper);
+  --color-primary-light: var(--blue-light);
+  --color-primary-pale: var(--blue-pale);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* { box-sizing: border-box; }
+body {
+  font-family: var(--font-geist-sans), 'Plus Jakarta Sans', sans-serif;
+  background: var(--bg);
+  color: var(--gray-900);
+  -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--gray-200); border-radius: 4px; }
+
+input, select, textarea, button { font-family: inherit; }
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-slide-up { animation: slideUp 0.55s cubic-bezier(.22,1,.36,1) both; }
+.animate-fade-in { animation: fadeIn 0.25s ease; }
+
+/* Hide scrollbar for icon toolbar while keeping scroll functionality */
+.nav-scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+.nav-scrollbar-hide::-webkit-scrollbar { display: none; }
+
+/* Print helpers for invoice layouts */
+.no-print { }
+.print-only { display: none; }
+.a4-print-only { display: none; }
+.thermal-print-only { display: none; }
+.inv-a4-print-only { display: none; }
+.inv-thermal-print-only { display: none; }
+.ledger-a4-print-only { display: none; }
+.inv-print-hdr { display: none; }
+
+/* @page must be top-level — nested inside @media print is ignored by browsers. */
+@page { size: A4 portrait; margin: 12mm 14mm; }
+
+@media print {
+  /* Hide the app shell (header, sidebar) and all non-print UI */
+  .no-print { display: none !important; }
+
+  /* Reset main content area offsets added by the sidebar/header layout */
+  main { margin-left: 0 !important; padding-top: 0 !important; padding: 0 !important; }
+
+  /* Hide the page/form UI inside the invoice page — only print-only should show */
+  .animate-fade-in { display: none !important; }
+
+  /* Show standard A4 print templates */
+  .print-only,
+  .a4-print-only {
+    display: block !important;
+    width: 100%;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  /* Ledger A4 — flex column + A4 content-area min-height pins the footer
+     to the bottom of the page even when the ledger has only a few rows. */
+  .ledger-a4-print-only {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 273mm !important;
+    width: 100%;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  .ledger-a4-print-only * { box-sizing: border-box; max-width: 100%; }
+
+  /* Thermal template — hidden in default A4 mode */
+  .thermal-print-only { display: none !important; }
+
+  /* Thermal mode: body.thermal-mode toggles which template is visible */
+  body.thermal-mode .a4-print-only { display: none !important; }
+  body.thermal-mode .print-only { display: none !important; }
+  body.thermal-mode .thermal-print-only {
+    display: block !important;
+    width: 72mm;
+    max-width: 72mm;
+    margin: 0 auto;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  /* Prevent any child from exceeding the page width */
+  .print-only *,
+  .a4-print-only *,
+  .thermal-print-only * { box-sizing: border-box; max-width: 100%; }
+
+  body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+
+  /* Ensure header/footer images and background colors print */
+  .pdf-print-banner-img {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Force background colours in table headers and summary boxes to print */
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
