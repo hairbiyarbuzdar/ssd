@@ -1,5 +1,7 @@
 "use client";
 
+import { invoiceUnitRate, invoiceLineTotal } from "@/lib/invoicePricing";
+
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import html2canvas from "html2canvas";
@@ -52,19 +54,15 @@ interface InvItem {
   rate: number;
   qty: number;
   total: number;
-  pricingType: "sqft" | "standalone";
+  pricingType: "standalone";
 }
 
 function blankInvItem(): InvItem {
-  return { lineType: "product", product: "", laborType: "", description: "", width: 0, height: 0, sqft: 0, rate: 0, qty: 1, total: 0, pricingType: "sqft" };
+  return { lineType: "product", product: "", laborType: "", description: "", width: 0, height: 0, sqft: 0, rate: 0, qty: 1, total: 0, pricingType: "standalone" };
 }
 
 function calcInvItem(item: InvItem): InvItem {
-  if (item.pricingType === "standalone") {
-    return { ...item, sqft: 0, total: Math.round(Number(item.rate) * Number(item.qty) * 100) / 100 };
-  }
-  const sqft = Math.round(Number(item.width) * Number(item.height) * 100) / 100;
-  return { ...item, sqft, total: Math.round(sqft * Number(item.rate) * Number(item.qty) * 100) / 100 };
+  return { ...item, width: 0, height: 0, sqft: 0, pricingType: "standalone", total: invoiceLineTotal(item.rate, item.qty) };
 }
 
 export default function AccountsPage() {
@@ -524,17 +522,17 @@ export default function AccountsPage() {
     const mappedItems: InvItem[] = ((itemRows ?? []) as Record<string, unknown>[]).map((it) => {
       const productName = String(it.category || "");
       const dbProd = invProducts.find((p) => p.name === productName);
-      const pricingType: "sqft" | "standalone" = dbProd?.pricing_type === "standalone" ? "standalone" : "sqft";
+      const pricingType = "standalone" as const;
       return calcInvItem({
         lineType: "product",
         product: productName,
         productId: it.product_id ? String(it.product_id) : dbProd?.id ?? null,
         laborType: "",
         description: String(it.description ?? ""),
-        width: Number(it.width),
-        height: Number(it.height),
-        sqft: Number(it.sqft),
-        rate: Number(it.rate),
+        width: 0,
+        height: 0,
+        sqft: 0,
+        rate: invoiceUnitRate(it),
         qty: Number(it.qty),
         total: Number(it.amount),
         pricingType,
@@ -798,7 +796,7 @@ export default function AccountsPage() {
         product: newProduct.name,
         productId: newProduct.id,
         rate: Number(newProduct.sale_price) || 0,
-        pricingType: isStandalone ? "standalone" : "sqft",
+        pricingType: "standalone",
       };
       if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
       if (!item.description.trim() && newProduct.description?.trim()) {
@@ -818,7 +816,7 @@ export default function AccountsPage() {
         const dbProd = invProducts.find((p) => p.name === value);
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
-          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
+          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: "standalone" };
           if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
           if (!item.description.trim() && dbProd.description?.trim()) {
             item = { ...item, description: dbProd.description.trim() };
@@ -826,7 +824,7 @@ export default function AccountsPage() {
         }
       }
       if (field === "lineType" && value === "labor") {
-        item = { ...item, product: "", width: 0, height: 0, sqft: 1, pricingType: "sqft" };
+        item = { ...item, product: "", width: 0, height: 0, sqft: 1, pricingType: "standalone" };
       }
       items[idx] = calcInvItem(item);
       return items;
@@ -917,8 +915,6 @@ export default function AccountsPage() {
         if (invUpdErr) { showToast(invUpdErr.message, "err"); setInvSaving(false); return; }
 
         // Canonical items and stock were saved with the invoice.
-
-
 
         // 3. Sync quick_invoices / quick_invoice_items (best-effort)
         const { data: qiRows } = await db
@@ -1013,8 +1009,6 @@ export default function AccountsPage() {
       setEditingInvoiceId(invData.id);
       setEditingInvoiceOldAmountReceived(amountReceived);
       setInvNextNum(confirmedNum);
-
-
 
       // Mirror into quick_invoices (legacy/parallel storage — no unique
       // constraint here) using the CONFIRMED number so both tables agree.
@@ -1182,9 +1176,9 @@ export default function AccountsPage() {
           items: ((itemRows ?? []) as Record<string, unknown>[]).map((r) => ({
             category: String(r.category ?? ""),
             description: String(r.description ?? ""),
-            width: Number(r.width),
-            height: Number(r.height),
-            sqft: Number(r.sqft),
+            width: 0,
+            height: 0,
+            sqft: 0,
             rate: Number(r.rate),
             qty: Number(r.qty),
             amount: Number(r.amount),
@@ -1213,10 +1207,10 @@ export default function AccountsPage() {
       items: viewingInvoiceItems.map((it) => ({
         category: it.category || "",
         description: it.description || undefined,
-        width: Number(it.width) || 0,
-        height: Number(it.height) || 0,
-        sqft: Number(it.sqft) || 0,
-        rate: Number(it.rate) || 0,
+        width: 0,
+        height: 0,
+        sqft: 0,
+        rate: invoiceUnitRate(it),
         qty: Number(it.qty) || 1,
         amount: Number(it.amount) || 0,
       })),
@@ -1839,7 +1833,7 @@ export default function AccountsPage() {
                             <table className="w-full border-collapse">
                               <thead>
                                 <tr>
-                                  {["Product", "W (ft)", "H (ft)", "Sq.ft", "Qty", "Rate", "Amount"].map((h, hi) => (
+                                  {["Product", "Qty", "Rate", "Amount"].map((h, hi) => (
                                     <th
                                       key={h}
                                       className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide"
@@ -1856,11 +1850,9 @@ export default function AccountsPage() {
                                     <td className="px-2 py-1 text-[11px]" style={{ color: "var(--gray-700)" }}>
                                       {String(it.description || it.category || "Item").trim() || "Item"}
                                     </td>
-                                    <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{Number(it.width) || "—"}</td>
-                                    <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{Number(it.height) || "—"}</td>
-                                    <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{Number(it.sqft) ? Number(it.sqft).toLocaleString() : "—"}</td>
+
                                     <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{Number(it.qty) || "—"}</td>
-                                    <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{Number(it.rate) ? formatCurrency(Number(it.rate)) : "—"}</td>
+                                    <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-700)" }}>{invoiceUnitRate(it) ? formatCurrency(invoiceUnitRate(it)) : "—"}</td>
                                     <td className="px-2 py-1 text-[11px] font-mono text-right" style={{ color: "var(--gray-900)" }}>{Number(it.amount) ? formatCurrency(Number(it.amount)) : "—"}</td>
                                   </tr>
                                 ))}
@@ -1941,7 +1933,7 @@ export default function AccountsPage() {
                 <table className="w-full border-collapse" style={{ minWidth: 580 }}>
                   <thead>
                     <tr>
-                      {["Product", "W (ft)", "H (ft)", "Qty", "Total Sq.ft", "Rate/sqft", "Total", ""].map((h) => (
+                      {["Product", "Qty", "Rate", "Total", ""].map((h) => (
                         <th key={h} className={`${DT.thDense} text-left`} style={DT.thStyle}>
                           {h}
                         </th>
@@ -1971,24 +1963,7 @@ export default function AccountsPage() {
                             className="mt-1.5 border border-[var(--gray-200)] rounded-[6px] px-2 py-1.5 text-[12px] outline-none bg-white focus:border-[var(--blue)] w-full resize-y min-h-[44px]"
                           />
                         </td>
-                        {/* W */}
-                        <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 82 }}>
-                          <input type="number" min="0" step="0.1"
-                            value={item.width || ""}
-                            disabled={item.pricingType === "standalone"}
-                            onChange={(e) => updateInvItem(idx, "width", parseFloat(e.target.value) || 0)}
-                            className="border-2 border-[var(--gray-200)] rounded-[7px] px-2 py-2 text-[16px] font-bold outline-none bg-white focus:border-[var(--blue)] w-full text-center disabled:opacity-30 disabled:cursor-not-allowed"
-                            placeholder="0" />
-                        </td>
-                        {/* H */}
-                        <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 82 }}>
-                          <input type="number" min="0" step="0.1"
-                            value={item.height || ""}
-                            disabled={item.pricingType === "standalone"}
-                            onChange={(e) => updateInvItem(idx, "height", parseFloat(e.target.value) || 0)}
-                            className="border-2 border-[var(--gray-200)] rounded-[7px] px-2 py-2 text-[16px] font-bold outline-none bg-white focus:border-[var(--blue)] w-full text-center disabled:opacity-30 disabled:cursor-not-allowed"
-                            placeholder="0" />
-                        </td>
+
                         {/* Qty */}
                         <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 90 }}>
                           <input type="number" min="1"
@@ -1999,11 +1974,7 @@ export default function AccountsPage() {
                             aria-invalid={item.qty < 1}
                             title={item.qty < 1 ? "Quantity must be at least 1" : undefined} />
                         </td>
-                        {/* Sq.ft */}
-                        <td className="px-3 py-2 border-b border-[var(--gray-100)] font-mono font-extrabold text-center"
-                          style={{ color: item.pricingType === "standalone" ? "var(--gray-300)" : item.sqft > 0 ? "var(--gray-800)" : "var(--gray-300)", fontSize: 15, width: 72 }}>
-                          {item.pricingType === "standalone" ? "—" : item.sqft > 0 ? Math.round(item.sqft * item.qty * 100) / 100 : "—"}
-                        </td>
+
                         {/* Rate */}
                         <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 100 }}>
                           <input type="number" min="0"
@@ -2623,7 +2594,7 @@ export default function AccountsPage() {
                     <table className="w-full border-collapse" style={{ minWidth: 500 }}>
                       <thead>
                         <tr>
-                          {["SN", "Description", "Qty", "W (ft)", "H (ft)", "Sq.ft", "Rate", "Amount"].map((h, i) => (
+                          {["SN", "Description", "Qty", "Rate", "Amount"].map((h, i) => (
                             <th
                               key={`ii-h-${i}`}
                               className={`${DT.thDense} ${i === 0 ? "text-center" : i >= 2 ? "text-right" : "text-left"}`}
@@ -2645,10 +2616,8 @@ export default function AccountsPage() {
                               ) : null}
                             </td>
                             <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{item.qty}</td>
-                            <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{item.width || "—"}</td>
-                            <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{item.height || "—"}</td>
-                            <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{item.sqft || "—"}</td>
-                            <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{formatCurrency(item.rate)}</td>
+
+                            <td className={`${DT.tdDense} font-mono text-right text-[12.5px]`} style={{ color: "var(--gray-700)" }}>{formatCurrency(invoiceUnitRate(item))}</td>
                             <td className={`${DT.tdDense} font-mono text-right font-bold text-[13px]`} style={{ color: "var(--gray-900)" }}>{formatCurrency(item.amount)}</td>
                           </tr>
                         ))}
@@ -2911,7 +2880,7 @@ export default function AccountsPage() {
             {(() => {
               // CSS-grid layout (instead of <table>) so the items area can flex-grow
               // and the filler block stretches the column lines to the totals block.
-              const gridCols = "5% 33% 6% 7% 7% 13% 13% 16%";
+              const gridCols = "5% 55% 8% 14% 18%";
               const cellPad = "6px 8px";
               return (
                 <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
@@ -2921,9 +2890,6 @@ export default function AccountsPage() {
                       { label: "SN", align: "center" as const },
                       { label: "Description", align: "left" as const },
                       { label: "Qty", align: "center" as const },
-                      { label: "W (ft)", align: "center" as const },
-                      { label: "H (ft)", align: "center" as const },
-                      { label: "Sq.ft", align: "center" as const },
                       { label: "Rate", align: "right" as const },
                       { label: "Amount", align: "right" as const },
                     ].map((h, i, arr) => (
@@ -2945,24 +2911,13 @@ export default function AccountsPage() {
                         ) : null}
                       </div>
                       <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", fontWeight: 700, borderLeft: "1px solid #000" }}>{it.qty}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{it.width || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{it.height || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", fontWeight: 600, borderLeft: "1px solid #000" }}>{it.sqft || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{formatCurrency(it.rate)}</div>
+
+                      <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{formatCurrency(invoiceUnitRate(it))}</div>
                       <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", fontWeight: 800, color: "#111", borderLeft: "1px solid #000", borderRight: "1px solid #000" }}>{formatCurrency(it.amount)}</div>
                     </div>
                   ))}
                   {/* Filler — flex-grows to fill remaining space, carries column lines down to the totals. */}
-                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #000" }}>
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000", borderRight: "1px solid #000" }} />
-                  </div>
+                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #000" }}>{Array.from({ length: 5 }, (_, index) => <div key={index} style={{ borderLeft: "1px solid #000", ...(index === 4 ? { borderRight: "1px solid #000" } : {}) }} />)}</div>
                 </div>
               );
             })()}
@@ -3009,8 +2964,6 @@ export default function AccountsPage() {
         );
       })() : null}
     </div>
-
-
 
     {/* Ledger print layout — mirrors the A4 invoice template (same header, colors, borders, footer) */}
     {ledgerAccount && (
@@ -3103,12 +3056,9 @@ export default function AccountsPage() {
                 // run unbroken; the products table fills the remaining width (aligned to
                 // the Description column's left edge through the right border).
                 const detailCols = "11% 17% 72%";
-                const itemCols = "37% 10% 10% 13% 8% 11% 11%";
+                const itemCols = "55% 10% 15% 20%";
                 const itemHeads = [
                   { label: "Product", align: "left" as const },
-                  { label: "W (ft)", align: "right" as const },
-                  { label: "H (ft)", align: "right" as const },
-                  { label: "Sq.ft", align: "right" as const },
                   { label: "Qty", align: "right" as const },
                   { label: "Rate", align: "right" as const },
                   { label: "Amount", align: "right" as const },
@@ -3151,11 +3101,9 @@ export default function AccountsPage() {
                       {items.map((it, ii) => (
                         <div key={it.id} style={{ display: "grid", gridTemplateColumns: itemCols, fontSize: 10, borderBottom: ii === items.length - 1 ? "none" : "1px solid #ddd" }}>
                           <div style={{ padding: "2px 5px", color: "#222" }}>{String(it.description || it.category || "Item").trim() || "Item"}</div>
-                          <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{Number(it.width) || "—"}</div>
-                          <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{Number(it.height) || "—"}</div>
-                          <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{Number(it.sqft) ? Number(it.sqft).toLocaleString() : "—"}</div>
+
                           <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{Number(it.qty) || "—"}</div>
-                          <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{Number(it.rate) ? formatCurrency(Number(it.rate)) : "—"}</div>
+                          <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#222", borderLeft: "1px solid #eee" }}>{invoiceUnitRate(it) ? formatCurrency(invoiceUnitRate(it)) : "—"}</div>
                           <div style={{ padding: "2px 5px", textAlign: "right", fontFamily: "monospace", color: "#111", fontWeight: 700, borderLeft: "1px solid #eee" }}>{Number(it.amount) ? formatCurrency(Number(it.amount)) : "—"}</div>
                         </div>
                       ))}

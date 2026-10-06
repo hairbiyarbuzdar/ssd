@@ -1,3 +1,4 @@
+import { invoiceUnitRate } from "@/lib/invoicePricing";
 import { formatCurrency, formatDate } from "@/lib/helpers";
 
 /** Digits for https://wa.me/{digits} (Pakistan mobiles: 03xx → 923xx…). */
@@ -123,7 +124,7 @@ export function buildInvoiceShareWhatsAppMessage(input: {
       const extra = (it.description || "").trim();
       const label = extra ? `${name} (${extra})` : name;
       lines.push(
-        `${i + 1}. *${label}* — ${it.width}×${it.height} ft, ${it.sqft} sqft, qty *${it.qty}*, rate ${formatCurrency(it.rate)}, amount *${formatCurrency(it.amount)}*`
+        `${i + 1}. *${label}* — qty *${it.qty}*, rate ${formatCurrency(invoiceUnitRate(it))}, amount *${formatCurrency(it.amount)}*`
       );
     });
   }
@@ -176,7 +177,7 @@ export function buildLastTransactionWhatsAppMessage(
         const extra = (it.description || "").trim();
         const label = extra ? `${name} (${extra})` : name;
         lines.push(
-          `${i + 1}. *${label}* — ${it.width}×${it.height} ft, ${it.sqft} sqft, qty *${it.qty}*, rate ${formatCurrency(it.rate)}, amount *${formatCurrency(it.amount)}*`
+          `${i + 1}. *${label}* — qty *${it.qty}*, rate ${formatCurrency(invoiceUnitRate(it))}, amount *${formatCurrency(it.amount)}*`
         );
       });
     }

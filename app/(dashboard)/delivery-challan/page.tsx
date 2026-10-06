@@ -1,5 +1,7 @@
 "use client";
 
+import { invoiceUnitRate } from "@/lib/invoicePricing";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
@@ -25,10 +27,7 @@ type InvoicePick = {
 type PrintRow = {
   id: string;
   detail: string;
-  ver: string;
-  hor: string;
   qty: string;
-  sFeet: string;
   rate: string;
   amount: string;
 };
@@ -55,20 +54,13 @@ function parseNum(s: string): number {
 
 function itemsToPrintRows(items: InvoiceItem[]): PrintRow[] {
   return items.map((it, i) => {
-    const w = Number(it.width);
-    const h = Number(it.height);
-    const sqUnit = Math.round(w * h);
     const qty = Number(it.qty) || 1;
-    const sFeetTot = sqUnit * qty;
     const detail = [it.category, it.description].filter(Boolean).join(" — ");
     return {
       id: it.id || `row-${i}`,
       detail,
-      ver: w ? String(w) : "",
-      hor: h ? String(h) : "",
       qty: String(qty),
-      sFeet: sFeetTot > 0 ? String(sFeetTot) : "",
-      rate: it.rate ? String(it.rate) : "",
+      rate: invoiceUnitRate(it) ? String(invoiceUnitRate(it)) : "",
       amount: Number(it.amount) > 0 ? String(Math.round(Number(it.amount))) : "",
     };
   });
@@ -189,7 +181,7 @@ export default function DeliveryChallanPage() {
     () =>
       printRows.length
         ? printRows
-        : [{ id: "e", detail: "", ver: "", hor: "", qty: "", sFeet: "", rate: "", amount: "" }],
+        : [{ id: "e", detail: "", qty: "", rate: "", amount: "" }],
     [printRows],
   );
 
@@ -515,50 +507,18 @@ export default function DeliveryChallanPage() {
             marginBottom: 12,
           }}
         >
-          <thead>
-            <tr>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "6%", verticalAlign: "middle", fontWeight: 700 }}>
-                S.#
-              </th>
-              <th
-                rowSpan={2}
-                style={{
-                  border: "1px solid #000",
-                  padding: "6px 6px",
-                  width: "34%",
-                  verticalAlign: "middle",
-                  fontWeight: 700,
-                  textAlign: "left",
-                }}
-              >
-                Detail
-              </th>
-              <th colSpan={4} style={{ border: "1px solid #000", padding: "5px 4px", fontWeight: 700, textAlign: "center", letterSpacing: 0.5 }}>
-                SIZE / QUANTITY
-              </th>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "11%", verticalAlign: "middle", fontWeight: 700 }}>
-                RATE
-              </th>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "13%", verticalAlign: "middle", fontWeight: 700 }}>
-                Amount
-              </th>
-            </tr>
-            <tr>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>VER</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>HOR</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>QTY</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>S.Feet</th>
-            </tr>
-          </thead>
+          <thead><tr>{["S.#", "Detail", "Qty", "Rate", "Amount"].map((label, index) => (
+            <th key={label} style={{ border: "1px solid #000", padding: "6px", fontWeight: 700,
+              textAlign: index === 1 ? "left" : "center", width: index === 1 ? "52%" : "12%" }}>{label}</th>
+          ))}</tr></thead>
           <tbody>
             {rowsForPdf.map((r, idx) => (
               <tr key={r.id}>
                 <td style={{ border: "1px solid #000", padding: "5px 4px", textAlign: "center", fontFamily: "monospace" }}>{idx + 1}</td>
                 <td style={{ border: "1px solid #000", padding: "5px 6px", verticalAlign: "top" }}>{r.detail || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.ver || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.hor || "\u00A0"}</td>
+
                 <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.qty || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.sFeet || "\u00A0"}</td>
+
                 <td style={{ border: "1px solid #000", padding: "5px 4px", textAlign: "right", fontFamily: "monospace" }}>
                   {r.rate ? formatCurrency(parseNum(r.rate)).replace("Rs ", "") : "\u00A0"}
                 </td>
@@ -568,7 +528,7 @@ export default function DeliveryChallanPage() {
               </tr>
             ))}
             <tr>
-              <td colSpan={7} style={{ border: "1px solid #000", padding: "7px 6px", fontWeight: 800, textAlign: "right", letterSpacing: 1 }}>
+              <td colSpan={4} style={{ border: "1px solid #000", padding: "7px 6px", fontWeight: 800, textAlign: "right", letterSpacing: 1 }}>
                 TOTAL
               </td>
               <td style={{ border: "1px solid #000", padding: "7px 6px", textAlign: "right", fontFamily: "monospace", fontWeight: 800 }}>

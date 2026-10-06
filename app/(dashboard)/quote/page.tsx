@@ -1,5 +1,7 @@
 "use client";
 
+import { invoiceUnitRate, invoiceLineTotal } from "@/lib/invoicePricing";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
@@ -35,10 +37,7 @@ interface LineItem {
 interface QuotePrintRow {
   id: string;
   detail: string;
-  ver: string;
-  hor: string;
   qty: string;
-  sFeet: string;
   rate: string;
   amount: string;
 }
@@ -58,8 +57,7 @@ function blankLine(): LineItem {
 }
 
 function calcLine(item: LineItem): LineItem {
-  const sqft = Math.round(Number(item.width) * Number(item.height));
-  return { ...item, sqft, total: sqft * Number(item.rate) * Number(item.qty) };
+  return { ...item, width: 0, height: 0, sqft: 0, total: invoiceLineTotal(item.rate, item.qty) };
 }
 
 function formatQuoteDate(iso: string): string {
@@ -83,16 +81,11 @@ function parseNum(s: string): number {
 
 function lineItemsToPrintRows(items: LineItem[]): QuotePrintRow[] {
   return items.map((it) => {
-    const sqUnit = Math.round(Number(it.width) * Number(it.height));
-    const sFeetTot = sqUnit * (Number(it.qty) || 1);
     const detail = [it.product, it.description].filter(Boolean).join(" — ");
     return {
       id: it.id,
       detail,
-      ver: it.width ? String(it.width) : "",
-      hor: it.height ? String(it.height) : "",
       qty: String(it.qty || 1),
-      sFeet: sFeetTot > 0 ? String(sFeetTot) : "",
       rate: it.rate ? String(it.rate) : "",
       amount: it.total > 0 ? String(Math.round(it.total)) : "",
     };
@@ -308,10 +301,10 @@ export default function QuotePage() {
                 id: crypto.randomUUID(),
                 product: String(it.category ?? ""),
                 description: String(it.description ?? ""),
-                width: Number(it.width),
-                height: Number(it.height),
-                sqft: Number(it.sqft),
-                rate: Number(it.rate),
+                width: 0,
+                height: 0,
+                sqft: 0,
+                rate: invoiceUnitRate(it),
                 qty: Number(it.qty) || 1,
                 total: Number(it.amount),
               })
@@ -472,10 +465,10 @@ export default function QuotePage() {
               id: crypto.randomUUID(),
               product: String(it.product ?? ""),
               description: String(it.description ?? ""),
-              width: Number(it.width),
-              height: Number(it.height),
-              sqft: Number(it.sqft),
-              rate: Number(it.rate),
+              width: 0,
+              height: 0,
+              sqft: 0,
+              rate: invoiceUnitRate(it),
               qty: Number(it.qty) || 1,
               total: Number(it.amount),
             })
@@ -542,10 +535,10 @@ export default function QuotePage() {
                 id: crypto.randomUUID(),
                 product: String(it.product ?? ""),
                 description: String(it.description ?? ""),
-                width: Number(it.width),
-                height: Number(it.height),
-                sqft: Number(it.sqft),
-                rate: Number(it.rate),
+                width: 0,
+                height: 0,
+                sqft: 0,
+                rate: invoiceUnitRate(it),
                 qty: Number(it.qty) || 1,
                 total: Number(it.amount),
               })
@@ -567,17 +560,14 @@ export default function QuotePage() {
     }
     const { data: items } = await db
       .from("quotation_items")
-      .select("product, description, sqft, rate, qty, amount")
+      .select("product, description, rate, qty, amount")
       .eq("quotation_id", q.id)
       .order("id", { ascending: true });
 
     const itemLines = ((items ?? []) as Record<string, unknown>[])
       .map((it, i) => {
         const label = [it.product, it.description].filter(Boolean).join(" — ");
-        const detail =
-          Number(it.sqft) > 0
-            ? `   ${it.sqft} sqft × Rs ${Number(it.rate).toLocaleString("en-PK")} × ${it.qty} = *Rs ${Math.round(Number(it.amount)).toLocaleString("en-PK")}*`
-            : `   *Rs ${Math.round(Number(it.amount)).toLocaleString("en-PK")}*`;
+        const detail = `   Qty ${it.qty} x ${formatCurrency(invoiceUnitRate(it))} = *${formatCurrency(Number(it.amount))}*`;
         return `${i + 1}. ${label}\n${detail}`;
       })
       .join("\n");
@@ -655,7 +645,7 @@ export default function QuotePage() {
   }
 
   const displayDate = formatQuoteDate(quoteDate);
-  const rowsForPdf = printRows.length ? printRows : [{ id: "e", detail: "", ver: "", hor: "", qty: "", sFeet: "", rate: "", amount: "" }];
+  const rowsForPdf = printRows.length ? printRows : [{ id: "e", detail: "", qty: "", rate: "", amount: "" }];
 
   function handlePrint() {
     window.print();
@@ -1036,7 +1026,7 @@ export default function QuotePage() {
                   <table className="w-full border-collapse" style={{ minWidth: 640 }}>
                     <thead>
                       <tr>
-                        {["Product", "Description", "W (ft)", "H (ft)", "Sq.ft", "Rate/sqft", "Qty", "Total", ""].map((h) => (
+                        {["Product", "Description", "Rate", "Qty", "Total", ""].map((h) => (
                           <th key={h} className={`${DT.thDense} text-left`} style={DT.thStyle}>
                             {h}
                           </th>
@@ -1063,32 +1053,7 @@ export default function QuotePage() {
                               className="border border-[var(--gray-200)] rounded-[6px] px-2 py-1.5 text-[12px] outline-none w-full"
                             />
                           </td>
-                          <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 76 }}>
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.1}
-                              value={item.width || ""}
-                              onChange={(e) => updateLine(idx, { width: parseFloat(e.target.value) || 0 })}
-                              className="border-2 border-[var(--gray-200)] rounded-[7px] px-2 py-2 text-[15px] font-bold outline-none w-full text-center"
-                            />
-                          </td>
-                          <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 76 }}>
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.1}
-                              value={item.height || ""}
-                              onChange={(e) => updateLine(idx, { height: parseFloat(e.target.value) || 0 })}
-                              className="border-2 border-[var(--gray-200)] rounded-[7px] px-2 py-2 text-[15px] font-bold outline-none w-full text-center"
-                            />
-                          </td>
-                          <td
-                            className="px-2 py-2 border-b border-[var(--gray-100)] font-mono font-extrabold text-center text-[14px]"
-                            style={{ color: item.sqft > 0 ? "var(--gray-800)" : "var(--gray-300)", width: 64 }}
-                          >
-                            {item.sqft > 0 ? item.sqft : "—"}
-                          </td>
+
                           <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ width: 92 }}>
                             <input
                               type="number"
@@ -1274,50 +1239,18 @@ export default function QuotePage() {
             marginBottom: 12,
           }}
         >
-          <thead>
-            <tr>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "6%", verticalAlign: "middle", fontWeight: 700 }}>
-                S.#
-              </th>
-              <th
-                rowSpan={2}
-                style={{
-                  border: "1px solid #000",
-                  padding: "6px 6px",
-                  width: "34%",
-                  verticalAlign: "middle",
-                  fontWeight: 700,
-                  textAlign: "left",
-                }}
-              >
-                Detail
-              </th>
-              <th colSpan={4} style={{ border: "1px solid #000", padding: "5px 4px", fontWeight: 700, textAlign: "center", letterSpacing: 0.5 }}>
-                SIZE / QUANTITY
-              </th>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "11%", verticalAlign: "middle", fontWeight: 700 }}>
-                RATE
-              </th>
-              <th rowSpan={2} style={{ border: "1px solid #000", padding: "6px 4px", width: "13%", verticalAlign: "middle", fontWeight: 700 }}>
-                Amount
-              </th>
-            </tr>
-            <tr>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>VER</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>HOR</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>QTY</th>
-              <th style={{ border: "1px solid #000", padding: "5px 3px", fontWeight: 700 }}>S.Feet</th>
-            </tr>
-          </thead>
+          <thead><tr>{["S.#", "Detail", "Qty", "Rate", "Amount"].map((label, index) => (
+            <th key={label} style={{ border: "1px solid #000", padding: "6px", fontWeight: 700,
+              textAlign: index === 1 ? "left" : "center", width: index === 1 ? "52%" : "12%" }}>{label}</th>
+          ))}</tr></thead>
           <tbody>
             {rowsForPdf.map((r, idx) => (
               <tr key={r.id}>
                 <td style={{ border: "1px solid #000", padding: "5px 4px", textAlign: "center", fontFamily: "monospace" }}>{idx + 1}</td>
                 <td style={{ border: "1px solid #000", padding: "5px 6px", verticalAlign: "top" }}>{r.detail || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.ver || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.hor || "\u00A0"}</td>
+
                 <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.qty || "\u00A0"}</td>
-                <td style={{ border: "1px solid #000", padding: "5px 3px", textAlign: "center", fontFamily: "monospace" }}>{r.sFeet || "\u00A0"}</td>
+
                 <td style={{ border: "1px solid #000", padding: "5px 4px", textAlign: "right", fontFamily: "monospace" }}>
                   {r.rate ? formatCurrency(parseNum(r.rate)).replace("Rs ", "") : "\u00A0"}
                 </td>
@@ -1327,7 +1260,7 @@ export default function QuotePage() {
               </tr>
             ))}
             <tr>
-              <td colSpan={7} style={{ border: "1px solid #000", padding: "7px 6px", fontWeight: 800, textAlign: "right", letterSpacing: 1 }}>
+              <td colSpan={4} style={{ border: "1px solid #000", padding: "7px 6px", fontWeight: 800, textAlign: "right", letterSpacing: 1 }}>
                 TOTAL
               </td>
               <td style={{ border: "1px solid #000", padding: "7px 6px", textAlign: "right", fontFamily: "monospace", fontWeight: 800 }}>
@@ -1413,7 +1346,7 @@ export default function QuotePage() {
                 <input
                   type="number"
                   className="w-28 border border-[var(--gray-200)] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[var(--purple)]"
-                  placeholder="Rate/sqft"
+                  placeholder="Rate"
                   value={newQProdPrice}
                   onChange={(e) => setNewQProdPrice(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") void addQuoteProduct(); }}

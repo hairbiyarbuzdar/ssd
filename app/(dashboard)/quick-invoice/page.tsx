@@ -1,5 +1,7 @@
 "use client";
 
+import { invoiceUnitRate, invoiceLineTotal } from "@/lib/invoicePricing";
+
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { db, saveInvoice } from "@/lib/db";
 import { showToast } from "@/components/Toast";
@@ -34,7 +36,7 @@ interface Item {
   rate: number;
   qty: number;
   total: number;
-  pricingType: "sqft" | "standalone";
+  pricingType: "standalone";
 }
 
 interface WalkInDraft {
@@ -106,15 +108,11 @@ interface InvoicePdfPayload {
 }
 
 function blankItem(): Item {
-  return { lineType: "product", product: "", laborType: "", description: "", width: 0, height: 0, sqft: 0, rate: 0, qty: 1, total: 0, pricingType: "sqft" };
+  return { lineType: "product", product: "", laborType: "", description: "", width: 0, height: 0, sqft: 0, rate: 0, qty: 1, total: 0, pricingType: "standalone" };
 }
 
 function calcItem(item: Item): Item {
-  if (item.pricingType === "standalone") {
-    return { ...item, sqft: 0, total: Math.round(Number(item.rate) * Number(item.qty) * 100) / 100 };
-  }
-  const sqft = Math.round(Number(item.width) * Number(item.height));
-  return { ...item, sqft, total: sqft * Number(item.rate) * Number(item.qty) };
+  return { ...item, width: 0, height: 0, sqft: 0, pricingType: "standalone", total: invoiceLineTotal(item.rate, item.qty) };
 }
 
 function computeWalkInPayment(draft: WalkInDraft) {
@@ -375,7 +373,7 @@ export default function InvoicePage() {
         product: newProduct.name,
         productId: newProduct.id,
         rate: Number(newProduct.sale_price) || 0,
-        pricingType: isStandalone ? "standalone" : "sqft",
+        pricingType: "standalone",
       };
       if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
       if (!item.description.trim() && newProduct.description?.trim()) {
@@ -456,17 +454,17 @@ export default function InvoicePage() {
     const mapped = ((rows ?? []) as Record<string, unknown>[]).map((r) => {
       const productName = String(r.category ?? "");
       const dbProd = products.find((p) => p.name === productName);
-      const pricingType: "sqft" | "standalone" = dbProd?.pricing_type === "standalone" ? "standalone" : "sqft";
+      const pricingType = "standalone" as const;
       return {
         lineType: "product" as const,
         product: productName,
         productId: r.product_id ? String(r.product_id) : dbProd?.id ?? null,
         laborType: "",
         description: String(r.description ?? ""),
-        width: Number(r.width) || 0,
-        height: Number(r.height) || 0,
-        sqft: Number(r.sqft) || 0,
-        rate: Number(r.rate) || 0,
+        width: 0,
+        height: 0,
+        sqft: 0,
+        rate: invoiceUnitRate(r),
         qty: Number(r.qty) || 1,
         total: Number(r.amount) || 0,
         pricingType,
@@ -563,7 +561,6 @@ export default function InvoicePage() {
           return;
         }
 
-
         const { data: qRows } = await db
           .from("quick_invoices")
           .select("id")
@@ -626,8 +623,6 @@ export default function InvoicePage() {
         finalInvoiceNumber = invData.invoice_number;
         pendingProductIdsRef.current = [];
         setDraft(current => current ? { ...current, editingInvoiceId: invData.id, invoiceNumber: invData.invoice_number } : null);
-
-
 
         // Mirror into quick_invoices (legacy/parallel storage — no unique
         // constraint here) using the CONFIRMED number so both tables agree.
@@ -754,9 +749,9 @@ export default function InvoicePage() {
       items: ((rows ?? []) as Record<string, unknown>[]).map((it) => ({
         category: String(it.category ?? ""),
         description: String(it.description ?? ""),
-        width: Number(it.width),
-        height: Number(it.height),
-        sqft: Number(it.sqft),
+        width: 0,
+        height: 0,
+        sqft: 0,
         rate: Number(it.rate),
         qty: Number(it.qty),
         amount: Number(it.amount),
@@ -774,9 +769,9 @@ export default function InvoicePage() {
     return ((rows ?? []) as Record<string, unknown>[]).map((it) => ({
       category: String(it.category ?? ""),
       description: String(it.description ?? ""),
-      width: Number(it.width),
-      height: Number(it.height),
-      sqft: Number(it.sqft),
+      width: 0,
+      height: 0,
+      sqft: 0,
       rate: Number(it.rate),
       qty: Number(it.qty),
       amount: Number(it.amount),
@@ -1058,9 +1053,9 @@ export default function InvoicePage() {
     const items = ((itemRows ?? []) as Record<string, unknown>[]).map((r) => ({
       category: String(r.category ?? ""),
       description: String(r.description ?? ""),
-      width: Number(r.width),
-      height: Number(r.height),
-      sqft: Number(r.sqft),
+      width: 0,
+      height: 0,
+      sqft: 0,
       rate: Number(r.rate),
       qty: Number(r.qty),
       amount: Number(r.amount),
@@ -1528,7 +1523,7 @@ export default function InvoicePage() {
 
             {/* Items table — CSS grid (not <table>) so the items area can flex-grow and column lines extend to the totals. */}
             {(() => {
-              const gridCols = "5% 33% 6% 7% 7% 13% 13% 16%";
+              const gridCols = "5% 55% 8% 14% 18%";
               const cellPad = "6px 8px";
               return (
                 <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
@@ -1538,9 +1533,6 @@ export default function InvoicePage() {
                       { label: "SN", align: "center" as const },
                       { label: "Description", align: "left" as const },
                       { label: "Qty", align: "center" as const },
-                      { label: "W (ft)", align: "center" as const },
-                      { label: "H (ft)", align: "center" as const },
-                      { label: "Total Sq.ft", align: "center" as const },
                       { label: "Rate", align: "right" as const },
                       { label: "Amount", align: "right" as const },
                     ].map((h, i, arr) => (
@@ -1562,24 +1554,13 @@ export default function InvoicePage() {
                         ) : null}
                       </div>
                       <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", fontWeight: 700, borderLeft: "1px solid #000" }}>{it.qty}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{it.width || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{it.height || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "center", fontFamily: "monospace", fontWeight: 600, borderLeft: "1px solid #000" }}>{it.sqft && it.qty ? Math.round(it.sqft * it.qty * 100) / 100 : it.sqft || "—"}</div>
-                      <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{formatCurrency(it.rate)}</div>
+
+                      <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{formatCurrency(invoiceUnitRate(it))}</div>
                       <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", fontWeight: 800, color: "#111", borderLeft: "1px solid #000", borderRight: "1px solid #000" }}>{formatCurrency(it.amount)}</div>
                     </div>
                   ))}
                   {/* Filler — flex-grows to fill remaining space, carries column lines down to the totals. */}
-                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #000" }}>
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000" }} />
-                    <div style={{ borderLeft: "1px solid #000", borderRight: "1px solid #000" }} />
-                  </div>
+                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: gridCols, borderBottom: "1px solid #000" }}>{Array.from({ length: 5 }, (_, index) => <div key={index} style={{ borderLeft: "1px solid #000", ...(index === 4 ? { borderRight: "1px solid #000" } : {}) }} />)}</div>
                 </div>
               );
             })()}
@@ -1629,8 +1610,6 @@ export default function InvoicePage() {
         ) : null}
       </div>
 
-
-
       {draft && (
         <WalkInInvoiceModal
           draft={draft}
@@ -1655,7 +1634,6 @@ export default function InvoicePage() {
           onCreated={handleProductCreated}
         />
       )}
-
 
     </>
   );
@@ -1712,7 +1690,7 @@ function WalkInInvoiceModal({
         const dbProd = products.find((p) => p.name === value);
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
-          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
+          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: "standalone" };
           if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
           if (!item.description.trim() && dbProd.description?.trim()) {
             item = { ...item, description: dbProd.description.trim() };
@@ -1720,7 +1698,7 @@ function WalkInInvoiceModal({
         }
       }
       if (field === "lineType" && value === "labor") {
-        item = { ...item, product: "", width: 0, height: 0, sqft: 1, pricingType: "sqft" };
+        item = { ...item, product: "", width: 0, height: 0, sqft: 1, pricingType: "standalone" };
       }
       items[idx] = calcItem(item);
       return { ...d, items };
@@ -1840,11 +1818,11 @@ function WalkInInvoiceModal({
         </div>
 
         <div className="overflow-x-auto px-2 sm:px-4 py-4">
-          <table className={`${DT.table}`} style={{ minWidth: 860 }}>
+          <table className={`${DT.table}`} style={{ minWidth: 580 }}>
             <thead>
               <tr>
-                {["Product", "W (ft)", "H (ft)", "Qty", "Total Sq.ft", "Rate/sqft", "Total", "Actions"].map((h) => {
-                  const num = h === "W (ft)" || h === "H (ft)" || h === "Qty" || h === "Total Sq.ft" || h === "Rate/sqft" || h === "Total";
+                {["Product", "Qty", "Rate", "Total", "Actions"].map((h) => {
+                  const num = h === "Qty" || h === "Rate" || h === "Total";
                   const align = h === "Actions" ? "text-center" : num ? "text-center" : "text-left";
                   return (
                     <th key={h} className={`${DT.thDense} ${align}`} style={DT.thStyle}>
@@ -1878,32 +1856,7 @@ function WalkInInvoiceModal({
                       style={{ color: "#0C2433" }}
                     />
                   </td>
-                  <td className="px-1.5 py-3 border-b border-[var(--gray-100)]" style={{ minWidth: 132, width: 132 }}>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={item.width || ""}
-                      disabled={item.pricingType === "standalone"}
-                      onChange={(e) => updateItem(idx, "width", parseFloat(e.target.value) || 0)}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      className={`${lg} text-center disabled:opacity-30 disabled:cursor-not-allowed`}
-                      placeholder="0"
-                    />
-                  </td>
-                  <td className="px-1.5 py-3 border-b border-[var(--gray-100)]" style={{ minWidth: 132, width: 132 }}>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={item.height || ""}
-                      disabled={item.pricingType === "standalone"}
-                      onChange={(e) => updateItem(idx, "height", parseFloat(e.target.value) || 0)}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      className={`${lg} text-center disabled:opacity-30 disabled:cursor-not-allowed`}
-                      placeholder="0"
-                    />
-                  </td>
+
                   <td className="px-2 py-3 border-b border-[var(--gray-100)]" style={{ width: 80 }}>
                     <input
                       type="number"
@@ -1917,12 +1870,7 @@ function WalkInInvoiceModal({
                       title={item.qty < 1 ? "Quantity must be at least 1" : undefined}
                     />
                   </td>
-                  <td
-                    className="px-2.5 py-3 border-b border-[var(--gray-100)] text-center font-mono font-extrabold"
-                    style={{ color: item.pricingType === "standalone" ? "var(--gray-300)" : item.sqft > 0 ? "#0C2433" : "var(--gray-300)", width: 88, fontSize: 16 }}
-                  >
-                    {item.pricingType === "standalone" ? "—" : item.sqft > 0 ? Math.round(item.sqft * item.qty * 100) / 100 : "—"}
-                  </td>
+
                   <td className="px-2 py-3 border-b border-[var(--gray-100)]" style={{ width: 110 }}>
                     <input
                       type="number"
