@@ -6,6 +6,7 @@ export interface UserProfile {
   isAdmin: boolean;
   role: UserRole;
   fullName: string;
+  modules: string[];
 }
 
 export async function fetchUserProfile(): Promise<UserProfile | null> {
@@ -21,6 +22,7 @@ export async function fetchUserProfile(): Promise<UserProfile | null> {
       email: user.email ?? "",
       isAdmin: role === "super_admin",
       role,
+      modules: Array.isArray(user.modules) ? user.modules : [],
       fullName: user.full_name || (user.email ? String(user.email).split("@")[0] : "User"),
     };
   } catch {

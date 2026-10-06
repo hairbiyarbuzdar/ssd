@@ -260,7 +260,7 @@ export default function InvoiceReportPage() {
         <PrintHeader />
 
         {/* Title bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: "#166534", color: "#fff", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 12px", background: "#0369a1", color: "#fff", marginBottom: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Invoice Report</span>
           <span style={{ fontSize: 10, fontWeight: 600 }}>
             {formatDate(fromDate)} — {formatDate(toDate)}
@@ -272,7 +272,7 @@ export default function InvoiceReportPage() {
         {/* Summary cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, padding: "0 12px", marginBottom: 14 }}>
           {[
-            { label: "Total Invoices", val: String(filtered.length), color: "#166534" },
+            { label: "Total Invoices", val: String(filtered.length), color: "#0369a1" },
             { label: "Grand Total", val: formatCurrency(totalAmount), color: "#111" },
             { label: "Amount Received", val: formatCurrency(totalReceived), color: "#16a34a" },
             { label: "Balance Due", val: formatCurrency(totalBalance), color: "#dc2626" },
@@ -290,7 +290,7 @@ export default function InvoiceReportPage() {
             <thead>
               <tr>
                 {["#", "Invoice No", "Date", "Client / Party", "Grand Total", "Received", "Balance Due", "Status"].map((h) => (
-                  <th key={h} style={{ background: "#166534", color: "#fff", fontWeight: 700, textAlign: h === "Grand Total" || h === "Received" || h === "Balance Due" ? "right" : "left", padding: "7px 8px", fontSize: 9, letterSpacing: 0.8, textTransform: "uppercase" }}>
+                  <th key={h} style={{ background: "#0369a1", color: "#fff", fontWeight: 700, textAlign: h === "Grand Total" || h === "Received" || h === "Balance Due" ? "right" : "left", padding: "7px 8px", fontSize: 9, letterSpacing: 0.8, textTransform: "uppercase" }}>
                     {h}
                   </th>
                 ))}
@@ -300,7 +300,7 @@ export default function InvoiceReportPage() {
               {filtered.map((inv, idx) => (
                 <tr key={inv.id} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
                   <td style={{ padding: "6px 8px", color: "#666", borderLeft: "1px solid #e5e7eb" }}>{idx + 1}</td>
-                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#166534", fontFamily: "monospace", borderLeft: "1px solid #e5e7eb" }}>{inv.invoice_number}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#0369a1", fontFamily: "monospace", borderLeft: "1px solid #e5e7eb" }}>{inv.invoice_number}</td>
                   <td style={{ padding: "6px 8px", whiteSpace: "nowrap", borderLeft: "1px solid #e5e7eb" }}>{formatDate(inv.invoice_date)}</td>
                   <td style={{ padding: "6px 8px", borderLeft: "1px solid #e5e7eb" }}>
                     <div style={{ fontWeight: 700 }}>{inv.client_name}</div>
@@ -318,7 +318,7 @@ export default function InvoiceReportPage() {
               ))}
             </tbody>
             <tfoot>
-              <tr style={{ background: "#f3f4f6", borderTop: "2px solid #166534" }}>
+              <tr style={{ background: "#f3f4f6", borderTop: "2px solid #0369a1" }}>
                 <td colSpan={4} style={{ padding: "7px 8px", fontWeight: 900, fontSize: 11, borderLeft: "1px solid #e5e7eb" }}>
                   TOTAL — {filtered.length} Invoice{filtered.length !== 1 ? "s" : ""}
                   <span style={{ fontSize: 9.5, color: "#555", fontWeight: 500, marginLeft: 6 }}>

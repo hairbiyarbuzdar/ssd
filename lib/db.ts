@@ -8,6 +8,19 @@ export type DbError = { message: string; code?: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type DbResult<T = any> = { data: T; error: null } | { data: null; error: DbError };
 
+/** Invoice header, canonical items, and stock are committed together. */
+export async function saveInvoice(invoice: Record<string, unknown>, items: Record<string, unknown>[], invoiceId?: string): Promise<DbResult> {
+  try {
+    const response = await fetch("/api/db", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table: "invoices", operation: "save_invoice", data: invoice, items, invoiceId }),
+    });
+    return await response.json();
+  } catch {
+    return { data: null, error: { message: "Could not confirm invoice save. Reload the invoice list before trying again." } };
+  }
+}
+
 interface DbPayload {
   table: string;
   operation: "select" | "insert" | "update" | "delete";

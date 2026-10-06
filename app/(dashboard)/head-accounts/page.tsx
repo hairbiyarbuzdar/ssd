@@ -175,7 +175,7 @@ export default function HeadAccountsPage() {
         <button
           onClick={() => { setShowModal(true); setFormName(""); setFormType("Asset"); setGeneratedCode(""); setEditingId(null); }}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white transition-all"
-          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
         >
           <Plus size={14} /> Add Head
         </button>
@@ -288,7 +288,7 @@ export default function HeadAccountsPage() {
                     style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)" }}
                     placeholder="e.g. Government, Suppliers, Revenue..."
                     autoFocus
-                    onFocus={(e) => { e.target.style.borderColor = "var(--blue)"; e.target.style.background = "#fff"; e.target.style.boxShadow = "0 0 0 3px rgba(21,128,61,.08)"; }}
+                    onFocus={(e) => { e.target.style.borderColor = "var(--blue)"; e.target.style.background = "#fff"; e.target.style.boxShadow = "0 0 0 3px rgba(2,132,199,.08)"; }}
                     onBlur={(e) => { e.target.style.borderColor = "var(--gray-200)"; e.target.style.background = "var(--gray-50)"; e.target.style.boxShadow = "none"; }}
                     onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
                   />

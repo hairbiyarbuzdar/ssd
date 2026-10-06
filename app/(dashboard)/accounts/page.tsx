@@ -4,10 +4,10 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import { useRouter } from "next/navigation";
 import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
-import { db } from "@/lib/db";
+import { db, saveInvoice } from "@/lib/db";
 import { showToast } from "@/components/Toast";
 import { formatCurrency, formatDate, todayISO } from "@/lib/helpers";
-import { Plus, Search, Download, Edit, Trash2, X, Banknote, TrendingUp, Users, Layers, FileText, ChevronDown, BookOpen, Printer, Eye, ArrowLeft, Loader2 } from "lucide-react";
+import { Plus, Search, Download, Edit, Trash2, X, Banknote, TrendingUp, Users, Layers, FileText, ChevronDown, BookOpen, Printer, Eye, ArrowLeft, Loader2, ClipboardList } from "lucide-react";
 import type { Account, HeadAccount, Invoice, CashbookEntry, InvoiceItem } from "@/lib/database.types";
 import { usePaymentMethods, type PaymentMethod } from "@/lib/paymentMethods";
 import { ledgerRowsForDateRange, openingBalanceBeforeDate } from "@/lib/ledger";
@@ -16,7 +16,6 @@ import { fetchPartySignedBalance, syncCachedAccountBalance, recomputeCachedBalan
 import { DT } from "@/lib/dataTableStyles";
 import { PrintFooter } from "@/components/PrintFooter";
 import { PrintHeader } from "@/components/PrintHeader";
-import { ThermalHeader } from "@/components/ThermalHeader";
 import {
   openWhatsAppNewTab,
   openWhatsAppMessageOnlyNewTab,
@@ -25,6 +24,7 @@ import {
   buildInvoiceShareWhatsAppMessage,
 } from "@/lib/whatsappWaMe";
 import { useUser } from "@/lib/UserContext";
+import { ProductExpiryNotice } from "@/components/ProductExpiryNotice";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { confirmDialog } from "@/components/ConfirmModal";
 import { logActivity } from "@/lib/activityLog";
@@ -43,6 +43,7 @@ function WhatsAppIcon({ size = 18, className }: { size?: number; className?: str
 interface InvItem {
   lineType: "product" | "labor";
   product: string;
+  productId?: string | null;
   laborType: string;
   description: string;
   width: number;
@@ -114,7 +115,7 @@ export default function AccountsPage() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceAccount, setInvoiceAccount] = useState<Account | null>(null);
   const [invItems, setInvItems] = useState<InvItem[]>([blankInvItem()]);
-  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null }[]>([]);
+  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null; expiry_date?: string | null }[]>([]);
   const [invNextNum, setInvNextNum] = useState("SSD001");
   const [invSaving, setInvSaving] = useState(false);
   const [invAmountPaid, setInvAmountPaid] = useState("");
@@ -136,6 +137,7 @@ export default function AccountsPage() {
   // Tracks products inserted via the inline modal during this invoice session.
   // Deleted if the user cancels the invoice; cleared (kept) on successful save.
   const pendingProductIdsRef = useRef<string[]>([]);
+  const invoiceSaveRef = useRef(false);
 
   const [showLedgerModal, setShowLedgerModal] = useState(false);
   const [ledgerAccount, setLedgerAccount] = useState<Account | null>(null);
@@ -231,7 +233,7 @@ export default function AccountsPage() {
   }, [accounts.length, partyInvoices.length, partyCashbook.length]);
 
   const fetchInvProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date");
     if (!data) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const arr = data as any[];
@@ -526,6 +528,7 @@ export default function AccountsPage() {
       return calcInvItem({
         lineType: "product",
         product: productName,
+        productId: it.product_id ? String(it.product_id) : dbProd?.id ?? null,
         laborType: "",
         description: String(it.description ?? ""),
         width: Number(it.width),
@@ -681,53 +684,34 @@ export default function AccountsPage() {
     window.setTimeout(run, 3500);
   }
 
-  function applyInvPrintMode(type: "thermal" | "a4") {
+  function applyInvPrintMode() {
     const a4El = document.querySelector(".inv-a4-print-only") as HTMLElement | null;
-    const thEl = document.querySelector(".inv-thermal-print-only") as HTMLElement | null;
-    if (type === "thermal") {
-      if (a4El) a4El.style.setProperty("display", "none", "important");
-      if (thEl) thEl.style.setProperty("display", "block", "important");
-      const el = document.createElement("style");
-      el.id = "__inv_thermal_page_style";
-      el.textContent = "@page { size: 80mm auto; margin: 2mm 3mm; }";
-      document.head.appendChild(el);
-      document.body.classList.add("thermal-mode");
-    } else {
-      if (thEl) thEl.style.setProperty("display", "none", "important");
-      if (a4El) {
-        // Flex column + A4 min-height pins the footer to the bottom of the page
-        // even when the invoice has only a few line items.
-        a4El.style.setProperty("display", "flex", "important");
-        a4El.style.setProperty("flex-direction", "column", "important");
-        a4El.style.setProperty("min-height", "273mm", "important");
-      }
-      const el = document.createElement("style");
-      el.id = "__inv_a4_page_style";
-      el.textContent = "@page { size: A4 portrait; margin: 12mm 14mm; }";
-      document.head.appendChild(el);
+    if (a4El) {
+      a4El.style.setProperty("display", "flex", "important");
+      a4El.style.setProperty("flex-direction", "column", "important");
+      a4El.style.setProperty("min-height", "273mm", "important");
     }
+    const el = document.createElement("style");
+    el.id = "__inv_a4_page_style";
+    el.textContent = "@page { size: A4 portrait; margin: 12mm 14mm; }";
+    document.head.appendChild(el);
   }
 
   function restoreInvPrintMode() {
-    document.getElementById("__inv_thermal_page_style")?.remove();
     document.getElementById("__inv_a4_page_style")?.remove();
-    document.body.classList.remove("thermal-mode");
     const a4El = document.querySelector(".inv-a4-print-only") as HTMLElement | null;
-    const thEl = document.querySelector(".inv-thermal-print-only") as HTMLElement | null;
-    // Remove the inline override — CSS class (.inv-a4/thermal-print-only { display: none }) takes back over
     if (a4El) {
       a4El.style.removeProperty("display");
       a4El.style.removeProperty("flex-direction");
       a4El.style.removeProperty("min-height");
     }
-    if (thEl) thEl.style.removeProperty("display");
   }
 
-  async function printViewingInvoice(type: "thermal" | "a4") {
+  async function printViewingInvoice() {
     if (!viewingInvoice || invPrinting) return;
     setInvPrinting(true);
     try {
-      applyInvPrintMode(type);
+      applyInvPrintMode();
       scheduleAfterInvPrint(() => {
         restoreInvPrintMode();
         setInvPrinting(false);
@@ -798,7 +782,7 @@ export default function AccountsPage() {
   }
   // ─────────────────────────────────────────────────────────────────────────
 
-  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null }) => {
+  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }) => {
     pendingProductIdsRef.current.push(newProduct.id);
     await fetchInvProducts();
     const idx = productCreate?.idx;
@@ -812,6 +796,7 @@ export default function AccountsPage() {
       let item: InvItem = {
         ...cur,
         product: newProduct.name,
+        productId: newProduct.id,
         rate: Number(newProduct.sale_price) || 0,
         pricingType: isStandalone ? "standalone" : "sqft",
       };
@@ -829,10 +814,11 @@ export default function AccountsPage() {
       const items = [...prev];
       let item = { ...items[idx], [field]: value };
       if (field === "product") {
+        item.productId = null;
         const dbProd = invProducts.find((p) => p.name === value);
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
-          item = { ...item, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
+          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
           if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
           if (!item.description.trim() && dbProd.description?.trim()) {
             item = { ...item, description: dbProd.description.trim() };
@@ -870,43 +856,140 @@ export default function AccountsPage() {
     setEditingInvoiceOldAmountReceived(0);
   }
 
-  async function handleSaveInvoice(printType?: "a4" | "thermal") {
-    if (!invoiceAccount) return;
-    const subtotal = invItems.reduce((s, it) => s + it.total, 0);
-    const rawDiscount = parseFloat(String(invDiscountValue).replace(/,/g, "")) || 0;
-    const discountAmount =
-      invDiscountType === "pct"
-        ? Math.min(Math.max(0, rawDiscount), 100) * (subtotal / 100)
-        : Math.min(Math.max(0, rawDiscount), subtotal);
-    const afterDiscount = Math.max(0, subtotal - discountAmount);
-    const gstPct = Math.max(0, parseFloat(invGstPct) || 0);
-    const salesTaxPct = Math.max(0, parseFloat(invSalesTaxPct) || 0);
-    const braPct = Math.max(0, parseFloat(invBraPct) || 0);
-    const gstAmount = Math.round(afterDiscount * gstPct / 100 * 100) / 100;
-    const salesTaxAmount = Math.round(afterDiscount * salesTaxPct / 100 * 100) / 100;
-    const braAmount = Math.round(afterDiscount * braPct / 100 * 100) / 100;
-    const grandTotal = Math.max(0, Math.round((afterDiscount + gstAmount + salesTaxAmount + braAmount) * 100) / 100);
-    if (invItems.some((it) => Number(it.qty) < 1)) {
-      showToast("Each item must have a quantity of at least 1", "err");
-      return;
-    }
-    if (grandTotal <= 0) { showToast("Add at least one item with a total", "err"); return; }
+  async function handleSaveInvoice(printType?: "a4" | "challan") {
+    if (invoiceSaveRef.current) return;
+    invoiceSaveRef.current = true;
+    try {
+      if (!invoiceAccount) return;
+      const subtotal = invItems.reduce((s, it) => s + it.total, 0);
+      const rawDiscount = parseFloat(String(invDiscountValue).replace(/,/g, "")) || 0;
+      const discountAmount =
+        invDiscountType === "pct"
+          ? Math.min(Math.max(0, rawDiscount), 100) * (subtotal / 100)
+          : Math.min(Math.max(0, rawDiscount), subtotal);
+      const afterDiscount = Math.max(0, subtotal - discountAmount);
+      const gstPct = Math.max(0, parseFloat(invGstPct) || 0);
+      const salesTaxPct = Math.max(0, parseFloat(invSalesTaxPct) || 0);
+      const braPct = Math.max(0, parseFloat(invBraPct) || 0);
+      const gstAmount = Math.round(afterDiscount * gstPct / 100 * 100) / 100;
+      const salesTaxAmount = Math.round(afterDiscount * salesTaxPct / 100 * 100) / 100;
+      const braAmount = Math.round(afterDiscount * braPct / 100 * 100) / 100;
+      const grandTotal = Math.max(0, Math.round((afterDiscount + gstAmount + salesTaxAmount + braAmount) * 100) / 100);
+      if (invItems.some((it) => Number(it.qty) < 1)) {
+        showToast("Each item must have a quantity of at least 1", "err");
+        return;
+      }
+      if (grandTotal <= 0) { showToast("Add at least one item with a total", "err"); return; }
 
-    setInvSaving(true);
+      const stockItems = invItems.map(it => ({
+        product_id: it.lineType === "product" ? (it.productId ?? invProducts.find(p => p.name === it.product)?.id ?? null) : null,
+        category: it.lineType === "labor" ? "Labor" : it.product,
+        description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+        width: it.width, height: it.height, sqft: it.sqft, rate: it.rate, qty: it.qty, amount: it.total,
+      }));
 
-    // ── EDIT MODE ──────────────────────────────────────────────────────────────
-    if (editingInvoiceId) {
-      const amountReceived = editingInvoiceOldAmountReceived;
+      setInvSaving(true);
+
+      // ── EDIT MODE ──────────────────────────────────────────────────────────────
+      if (editingInvoiceId) {
+        const amountReceived = editingInvoiceOldAmountReceived;
+        const balanceDue = Math.round((grandTotal - amountReceived) * 100) / 100;
+        const paymentStatus: "unpaid" | "partial" | "paid" =
+          balanceDue <= 0 ? "paid" : amountReceived > 0 ? "partial" : "unpaid";
+
+        // 1. Update the invoices record
+        const { error: invUpdErr } = await saveInvoice({
+          subtotal,
+          grand_total: grandTotal,
+          balance_due: balanceDue,
+          payment_status: paymentStatus,
+          discount_type: invDiscountType,
+          discount_value: parseFloat(invDiscountValue) || 0,
+          discount_amount: discountAmount,
+          gst_pct: gstPct,
+          gst_amount: gstAmount,
+          stax_pct: salesTaxPct,
+          stax_amount: salesTaxAmount,
+          bra_pct: braPct,
+          bra_amount: braAmount,
+          job_notes: invDescription.trim(),
+        }, stockItems, editingInvoiceId);
+        if (invUpdErr) { showToast(invUpdErr.message, "err"); setInvSaving(false); return; }
+
+        // Canonical items and stock were saved with the invoice.
+
+
+
+        // 3. Sync quick_invoices / quick_invoice_items (best-effort)
+        const { data: qiRows } = await db
+          .from("quick_invoices")
+          .select("id")
+          .eq("invoice_number", invNextNum)
+          .limit(1);
+        const qiRow = Array.isArray(qiRows) ? qiRows[0] : null;
+        if (qiRow) {
+          await db.from("quick_invoices").update({ grand_total: grandTotal }).eq("id", qiRow.id);
+          await db.from("quick_invoice_items").delete().eq("quick_invoice_id", qiRow.id);
+          await db.from("quick_invoice_items").insert(
+            invItems.map((it) => ({
+              quick_invoice_id: qiRow.id,
+              product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
+              description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+              width: it.width,
+              height: it.height,
+              total_size: it.sqft,
+              rate_per_sqft: it.rate,
+              total: it.total,
+              qty: it.qty,
+              grand_total: it.total,
+            }))
+          );
+        }
+
+        // 4. Recompute the cached `accounts.balance` from the ledger so it stays
+        //    in lock-step with the Credit column (which is also ledger-derived).
+        //    Doing this from ground truth — instead of incrementing the cached
+        //    column by the balance_due delta — means the cache cannot drift even
+        //    if a previous write left it stale.
+        await recomputeCachedBalance(invoiceAccount.name);
+
+        showToast(`Invoice ${invNextNum} updated!`, "ok");
+        pendingProductIdsRef.current = [];
+        closeInvoiceModal();
+        setInvSaving(false);
+        fetchData();
+        return;
+      }
+
+      // ── CREATE MODE ────────────────────────────────────────────────────────────
+      const previousSigned = effectivePartySigned.get(invoiceAccount.id) ?? 0;
+      // Total the party owes including this new bill (previousSigned > 0 = they owe us)
+      const totalDueSave = Math.max(0, Math.round((previousSigned + grandTotal) * 100) / 100);
+      const paidParsed = parseFloat(String(invAmountPaid).replace(/,/g, "")) || 0;
+      // Payment can cover previous balance + new bill, not just the new bill
+      const amountReceived = Math.min(Math.max(0, paidParsed), totalDueSave);
+      // balance_due = new bill minus payment received (can be negative = extra paid off old balance)
       const balanceDue = Math.round((grandTotal - amountReceived) * 100) / 100;
       const paymentStatus: "unpaid" | "partial" | "paid" =
-        balanceDue <= 0 ? "paid" : amountReceived > 0 ? "partial" : "unpaid";
+        totalDueSave - amountReceived <= 0 ? "paid" : amountReceived > 0 ? "partial" : "unpaid";
 
-      // 1. Update the invoices record
-      const { error: invUpdErr } = await db.from("invoices").update({
+      const today = todayISO();
+
+      // Save the invoice, canonical items, and stock together — the server assigns invoice_number atomically
+      // (with retry on collision, see createInvoiceWithUniqueNumber in
+      // app/api/db/route.ts), so this is the single source of truth for the
+      // number. `invNextNum` on screen is only a preview before this resolves.
+      const { data: invData, error: invErr } = await saveInvoice({
+        invoice_number: invNextNum,
+        client_name: invoiceAccount.name,
+        invoice_date: today,
         subtotal,
         grand_total: grandTotal,
+        previous_balance: Math.max(0, previousSigned),
+        amount_received: amountReceived,
         balance_due: balanceDue,
         payment_status: paymentStatus,
+        payment_method: invPayMethod,
         discount_type: invDiscountType,
         discount_value: parseFloat(invDiscountValue) || 0,
         discount_amount: discountAmount,
@@ -917,227 +1000,129 @@ export default function AccountsPage() {
         bra_pct: braPct,
         bra_amount: braAmount,
         job_notes: invDescription.trim(),
-      }).eq("id", editingInvoiceId);
-      if (invUpdErr) { showToast(invUpdErr.message, "err"); setInvSaving(false); return; }
+      }, stockItems);
 
-      // 2. Replace invoice_items
-      await db.from("invoice_items").delete().eq("invoice_id", editingInvoiceId);
-      await db.from("invoice_items").insert(
-        invItems.map((it) => ({
-          invoice_id: editingInvoiceId,
-          category: it.lineType === "labor" ? "Labor" : it.product,
-          description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-          width: it.width,
-          height: it.height,
-          sqft: it.sqft,
-          rate: it.rate,
-          qty: it.qty,
-          amount: it.total,
-        }))
-      );
-
-      // 3. Sync quick_invoices / quick_invoice_items (best-effort)
-      const { data: qiRows } = await db
-        .from("quick_invoices")
-        .select("id")
-        .eq("invoice_number", invNextNum)
-        .limit(1);
-      const qiRow = Array.isArray(qiRows) ? qiRows[0] : null;
-      if (qiRow) {
-        await db.from("quick_invoices").update({ grand_total: grandTotal }).eq("id", qiRow.id);
-        await db.from("quick_invoice_items").delete().eq("quick_invoice_id", qiRow.id);
-        await db.from("quick_invoice_items").insert(
-          invItems.map((it) => ({
-            quick_invoice_id: qiRow.id,
-            product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
-            description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-            width: it.width,
-            height: it.height,
-            total_size: it.sqft,
-            rate_per_sqft: it.rate,
-            total: it.total,
-            qty: it.qty,
-            grand_total: it.total,
-          }))
-        );
-      }
-
-      // 4. Recompute the cached `accounts.balance` from the ledger so it stays
-      //    in lock-step with the Credit column (which is also ledger-derived).
-      //    Doing this from ground truth — instead of incrementing the cached
-      //    column by the balance_due delta — means the cache cannot drift even
-      //    if a previous write left it stale.
-      await recomputeCachedBalance(invoiceAccount.name);
-
-      showToast(`Invoice ${invNextNum} updated!`, "ok");
-      pendingProductIdsRef.current = [];
-      closeInvoiceModal();
-      setInvSaving(false);
-      fetchData();
-      return;
-    }
-
-    // ── CREATE MODE ────────────────────────────────────────────────────────────
-    const previousSigned = effectivePartySigned.get(invoiceAccount.id) ?? 0;
-    // Total the party owes including this new bill (previousSigned > 0 = they owe us)
-    const totalDueSave = Math.max(0, Math.round((previousSigned + grandTotal) * 100) / 100);
-    const paidParsed = parseFloat(String(invAmountPaid).replace(/,/g, "")) || 0;
-    // Payment can cover previous balance + new bill, not just the new bill
-    const amountReceived = Math.min(Math.max(0, paidParsed), totalDueSave);
-    // balance_due = new bill minus payment received (can be negative = extra paid off old balance)
-    const balanceDue = Math.round((grandTotal - amountReceived) * 100) / 100;
-    const paymentStatus: "unpaid" | "partial" | "paid" =
-      totalDueSave - amountReceived <= 0 ? "paid" : amountReceived > 0 ? "partial" : "unpaid";
-
-    const today = todayISO();
-
-    // Insert `invoices` FIRST — the server assigns invoice_number atomically
-    // (with retry on collision, see createInvoiceWithUniqueNumber in
-    // app/api/db/route.ts), so this is the single source of truth for the
-    // number. `invNextNum` on screen is only a preview before this resolves.
-    const { data: invData, error: invErr } = await db.from("invoices").insert({
-      invoice_number: invNextNum,
-      client_name: invoiceAccount.name,
-      invoice_date: today,
-      subtotal,
-      grand_total: grandTotal,
-      previous_balance: Math.max(0, previousSigned),
-      amount_received: amountReceived,
-      balance_due: balanceDue,
-      payment_status: paymentStatus,
-      payment_method: invPayMethod,
-      discount_type: invDiscountType,
-      discount_value: parseFloat(invDiscountValue) || 0,
-      discount_amount: discountAmount,
-      gst_pct: gstPct,
-      gst_amount: gstAmount,
-      stax_pct: salesTaxPct,
-      stax_amount: salesTaxAmount,
-      bra_pct: braPct,
-      bra_amount: braAmount,
-      job_notes: invDescription.trim(),
-    }).select().single();
-
-    if (invErr) {
-      showToast(invErr.message, "err");
-      setInvSaving(false);
-      return;
-    }
-
-    const confirmedNum = invData.invoice_number as string;
-
-    await db.from("invoice_items").insert(
-      invItems.map((it) => ({
-        invoice_id: invData.id,
-        category: it.lineType === "labor" ? "Labor" : it.product,
-        description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-        width: it.width,
-        height: it.height,
-        sqft: it.sqft,
-        rate: it.rate,
-        qty: it.qty,
-        amount: it.total,
-      }))
-    );
-
-    // Mirror into quick_invoices (legacy/parallel storage — no unique
-    // constraint here) using the CONFIRMED number so both tables agree.
-    const { data: qiData } = await db
-      .from("quick_invoices")
-      .insert({ invoice_number: confirmedNum, client_name: invoiceAccount.name, grand_total: grandTotal })
-      .select().single();
-
-    if (qiData) await db.from("quick_invoice_items").insert(
-      invItems.map((it) => ({
-        quick_invoice_id: qiData.id,
-        product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
-        description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-        width: it.width,
-        height: it.height,
-        total_size: it.sqft,
-        rate_per_sqft: it.rate,
-        total: it.total,
-        qty: it.qty,
-        grand_total: it.total,
-      }))
-    );
-
-    if (amountReceived > 0) {
-      const { error: cbInvErr } = await db.from("cashbook").insert({
-        type: "in",
-        description: `Payment on invoice ${confirmedNum} — ${invoiceAccount.name}`,
-        amount: amountReceived,
-        date: today,
-        account_name: invoiceAccount.name,
-        method: invPayMethod,
-        reference: invData.id,
-      });
-      if (cbInvErr) {
-        showToast(cbInvErr.message, "err");
+      if (invErr) {
+        showToast(invErr.message, "err");
         setInvSaving(false);
         return;
       }
-    }
 
-    // Recompute the cached `accounts.balance` from the ledger (invoice +
-    // optional cashbook payment row are now in the DB) so it agrees with the
-    // ledger-derived Credit column.
-    await recomputeCachedBalance(invoiceAccount.name);
+      const confirmedNum = invData.invoice_number as string;
+      pendingProductIdsRef.current = [];
+      setEditingInvoiceId(invData.id);
+      setEditingInvoiceOldAmountReceived(amountReceived);
+      setInvNextNum(confirmedNum);
 
-    // If flagged, create a PENDING expense (amount 0, no cash entry yet) linked
-    // to this invoice so it appears under Expense → Project Expense, then send
-    // the user there to fill in the amounts.
-    let goToExpense = false;
-    if (invAddToExpense) {
-      const { error: expErr } = await createExpense({
-        category: "",
-        description: `${confirmedNum} · ${invoiceAccount.name}`,
-        amount: 0,
-        method: invPayMethod,
-        date: today,
-        invoiceId: invData.id,
-        invoiceNumber: confirmedNum,
-      });
-      if (expErr) { showToast(expErr, "err"); setInvSaving(false); return; }
-      goToExpense = true;
-    }
 
-    showToast(`Invoice ${confirmedNum} saved!`, "ok");
 
-    if (printType && invData) {
-      // Populate the print template with the saved invoice before closing
-      setViewingInvoice(invData as Invoice);
-      setViewingInvoiceItems(
+      // Mirror into quick_invoices (legacy/parallel storage — no unique
+      // constraint here) using the CONFIRMED number so both tables agree.
+      const { data: qiData } = await db
+        .from("quick_invoices")
+        .insert({ invoice_number: confirmedNum, client_name: invoiceAccount.name, grand_total: grandTotal })
+        .select().single();
+
+      if (qiData) await db.from("quick_invoice_items").insert(
         invItems.map((it) => ({
-          id: "",
-          invoice_id: invData.id,
-          category: it.lineType === "labor" ? "Labor" : it.product,
+          quick_invoice_id: qiData.id,
+          product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
           description: it.lineType === "labor" ? it.laborType : it.description.trim(),
           width: it.width,
           height: it.height,
-          sqft: it.sqft,
-          rate: it.rate,
+          total_size: it.sqft,
+          rate_per_sqft: it.rate,
+          total: it.total,
           qty: it.qty,
-          amount: it.total,
+          grand_total: it.total,
         }))
       );
-      pendingProductIdsRef.current = [];
-      closeInvoiceModal();
-      setInvSaving(false);
-      fetchData();
-      refreshInvNum();
-      // Give React one tick to render the template, then print
-      await new Promise((r) => setTimeout(r, 150));
-      await printViewingInvoice(printType);
-    } else {
-      pendingProductIdsRef.current = [];
-      closeInvoiceModal();
-      setInvSaving(false);
-      fetchData();
-      refreshInvNum();
-    }
 
-    if (goToExpense) router.push("/expense");
+      if (amountReceived > 0) {
+        const { error: cbInvErr } = await db.from("cashbook").insert({
+          type: "in",
+          description: `Payment on invoice ${confirmedNum} — ${invoiceAccount.name}`,
+          amount: amountReceived,
+          date: today,
+          account_name: invoiceAccount.name,
+          method: invPayMethod,
+          reference: invData.id,
+        });
+        if (cbInvErr) {
+          showToast(cbInvErr.message, "err");
+          setInvSaving(false);
+          return;
+        }
+      }
+
+      // Recompute the cached `accounts.balance` from the ledger (invoice +
+      // optional cashbook payment row are now in the DB) so it agrees with the
+      // ledger-derived Credit column.
+      await recomputeCachedBalance(invoiceAccount.name);
+
+      // If flagged, create a PENDING expense (amount 0, no cash entry yet) linked
+      // to this invoice so it appears under Expense → Project Expense, then send
+      // the user there to fill in the amounts.
+      let goToExpense = false;
+      if (invAddToExpense) {
+        const { error: expErr } = await createExpense({
+          category: "",
+          description: `${confirmedNum} · ${invoiceAccount.name}`,
+          amount: 0,
+          method: invPayMethod,
+          date: today,
+          invoiceId: invData.id,
+          invoiceNumber: confirmedNum,
+        });
+        if (expErr) { showToast(expErr, "err"); setInvSaving(false); return; }
+        goToExpense = true;
+      }
+
+      showToast(`Invoice ${confirmedNum} saved!`, "ok");
+
+      if (printType === "a4" && invData) {
+        // Populate the print template with the saved invoice before closing
+        setViewingInvoice(invData as Invoice);
+        setViewingInvoiceItems(
+          invItems.map((it) => ({
+            id: "",
+            invoice_id: invData.id,
+            category: it.lineType === "labor" ? "Labor" : it.product,
+            description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+            width: it.width,
+            height: it.height,
+            sqft: it.sqft,
+            rate: it.rate,
+            qty: it.qty,
+            amount: it.total,
+          }))
+        );
+        pendingProductIdsRef.current = [];
+        closeInvoiceModal();
+        setInvSaving(false);
+        fetchData();
+        refreshInvNum();
+        // Give React one tick to render the template, then print
+        await new Promise((r) => setTimeout(r, 150));
+        await printViewingInvoice();
+      } else {
+        pendingProductIdsRef.current = [];
+        closeInvoiceModal();
+        setInvSaving(false);
+        fetchData();
+        refreshInvNum();
+      }
+
+      if (printType === "challan" && invData) {
+        router.push(`/delivery-challan?invoice=${encodeURIComponent(String(invData.id))}`);
+      } else if (goToExpense) router.push("/expense");
+
+    } catch {
+      showToast("Could not finish invoice save. Reload the invoice list before retrying.", "err");
+    } finally {
+      invoiceSaveRef.current = false;
+      setInvSaving(false);
+    }
   }
 
   function resetForm() {
@@ -1407,7 +1392,7 @@ export default function AccountsPage() {
           {userProfile?.isAdmin && (
             <button onClick={() => { resetForm(); setShowModal(true); }}
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white transition-all"
-              style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}>
+              style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}>
               <Plus size={14} /> Add Account
             </button>
           )}
@@ -1622,7 +1607,7 @@ export default function AccountsPage() {
                         <button
                           onClick={() => openReceiveModal(a)}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[8px] text-[12px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all hover:bg-green-50"
-                          style={{ borderColor: "var(--green)", color: "var(--green)" }}>
+                          style={{ borderColor: "var(--blue)", color: "var(--blue)" }}>
                           <Banknote size={12} /> Receive
                         </button>
                       </td>
@@ -1971,12 +1956,13 @@ export default function AccountsPage() {
                           <SearchableSelect
                             value={item.product}
                             onChange={(v) => updateInvItem(idx, "product", v)}
-                            options={invProducts.map((p) => ({ value: p.name, label: p.code ? `#${p.code} — ${p.name}` : p.name }))}
+                            options={invProducts.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
                             placeholder="— Product —"
                             inputClassName="border border-[var(--gray-200)] rounded-[6px] px-2 py-1.5 text-[12px] outline-none bg-white focus:border-[var(--blue)] w-full"
                             onCreate={(q) => setProductCreate({ idx, initialName: q })}
                             createLabel="+ Add new product"
                           />
+                    <ProductExpiryNotice product={invProducts.find(p => item.productId ? p.id === item.productId : p.name === item.product)} />
                           <textarea
                             value={item.description}
                             onChange={(e) => updateInvItem(idx, "description", e.target.value)}
@@ -2052,7 +2038,7 @@ export default function AccountsPage() {
                 <button
                   onClick={() => setInvItems((prev) => [...prev, blankInvItem()])}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[7px] text-[12px] font-semibold border-[1.5px] cursor-pointer transition-all"
-                  style={{ borderColor: "rgba(14,173,106,.3)", color: "var(--green)", background: "var(--green-light)" }}
+                  style={{ borderColor: "rgba(14,173,106,.3)", color: "var(--blue)", background: "var(--blue-light)" }}
                 >
                   <Plus size={12} /> Add Row
                 </button>
@@ -2326,6 +2312,12 @@ export default function AccountsPage() {
                   Cancel
                 </button>
                 <div className="flex gap-2 flex-wrap">
+                <button type="button" onClick={() => void handleSaveInvoice("challan")} disabled={invSaving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] cursor-pointer bg-white disabled:opacity-50"
+                  style={{ borderColor: "var(--blue)", color: "var(--blue)" }}
+                  title="Save invoice and open delivery challan">
+                  {invSaving ? <Loader2 size={13} className="animate-spin" /> : <ClipboardList size={13} />} Delivery Challan
+                </button>
                 <button onClick={() => void handleSaveInvoice("a4")} disabled={invSaving}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
                   style={{ borderColor: "var(--blue)", color: "var(--blue)" }}
@@ -2334,17 +2326,10 @@ export default function AccountsPage() {
                   title="Save and print A4">
                   {invSaving ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />} A4
                 </button>
-                <button onClick={() => void handleSaveInvoice("thermal")} disabled={invSaving}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
-                  style={{ borderColor: "var(--gray-500)", color: "var(--gray-700)" }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--gray-50)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
-                  title="Save and print Thermal">
-                  {invSaving ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />} Thermal
-                </button>
+
                 <button onClick={() => void handleSaveInvoice()} disabled={invSaving}
                   className="inline-flex items-center gap-1.5 px-5 py-2 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-60"
-                  style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}>
+                  style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}>
                   <FileText size={13} /> {invSaving ? "Saving…" : editingInvoiceId ? `Update Invoice ${invNextNum}` : `Save Invoice ${invNextNum}`}
                 </button>
                 </div>
@@ -2721,7 +2706,7 @@ export default function AccountsPage() {
                   <button
                     type="button"
                     disabled={invPrinting || viewingInvoiceItemsLoading}
-                    onClick={() => void printViewingInvoice("a4")}
+                    onClick={() => void printViewingInvoice()}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
                     style={{ borderColor: "var(--blue)", color: "var(--blue)" }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = "var(--blue-pale)")}
@@ -2730,24 +2715,24 @@ export default function AccountsPage() {
                     {invPrinting ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />}
                     A4
                   </button>
+
                   <button
                     type="button"
                     disabled={invPrinting || viewingInvoiceItemsLoading}
-                    onClick={() => void printViewingInvoice("thermal")}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
-                    style={{ borderColor: "var(--gray-500)", color: "var(--gray-700)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--gray-50)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
+                    onClick={() => router.push(`/delivery-challan?invoice=${encodeURIComponent(viewingInvoice.id)}`)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer disabled:opacity-50"
+                    style={{ borderColor: "var(--blue)", color: "var(--blue)" }}
                   >
-                    <Printer size={13} /> Thermal
+                    <ClipboardList size={13} /> Delivery Challan
                   </button>
+
                   <button
                     type="button"
                     disabled={invPrinting || viewingInvoiceItemsLoading}
                     onClick={() => void downloadInvoicePdf()}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
-                    style={{ borderColor: "#059669", color: "#059669" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "#F0FDF4")}
+                    style={{ borderColor: "#0277b5", color: "#0277b5" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#F0F9FF")}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
                   >
                     {invPrinting ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
@@ -2758,8 +2743,8 @@ export default function AccountsPage() {
                     disabled={viewingInvoiceItemsLoading}
                     onClick={sendViewingInvoiceWhatsApp}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-[1.5px] bg-white cursor-pointer transition-all disabled:opacity-50"
-                    style={{ borderColor: "#128C7E", color: "#128C7E" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "#F0FDF9")}
+                    style={{ borderColor: "#0277b5", color: "#0277b5" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#F0F9FF")}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "white")}
                     title="Send invoice details to customer on WhatsApp"
                   >
@@ -2855,7 +2840,7 @@ export default function AccountsPage() {
                       onClick={() => setFBalType("credit")}
                       className="flex-1 py-2 text-[12.5px] font-semibold border-none cursor-pointer transition-all"
                       style={{
-                        background: fBalType === "credit" ? "var(--green)" : "var(--gray-50)",
+                        background: fBalType === "credit" ? "var(--blue)" : "var(--gray-50)",
                         color: fBalType === "credit" ? "#fff" : "var(--gray-500)",
                       }}>
                       Credit
@@ -2898,7 +2883,7 @@ export default function AccountsPage() {
         return (
           <>
             <PrintHeader />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#14532d", color: "#fff", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#075985", color: "#fff", marginBottom: 10 }}>
               <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Invoice</span>
               <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13 }}>{inv.invoice_number}</span>
             </div>
@@ -2919,7 +2904,7 @@ export default function AccountsPage() {
                   <span style={{ fontWeight: 700, fontSize: 12 }}>{formatDate(inv.invoice_date)}</span>
                 </div>
                 <div style={{ marginTop: 4, textAlign: "right" }}>
-                  <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S.D</div>
+                  <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S. Diagnostics</div>
                 </div>
               </div>
             </div>
@@ -2931,7 +2916,7 @@ export default function AccountsPage() {
               return (
                 <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
                   {/* Header row */}
-                  <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#14532d", color: "#fff" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#075985", color: "#fff" }}>
                     {[
                       { label: "SN", align: "center" as const },
                       { label: "Description", align: "left" as const },
@@ -3025,113 +3010,7 @@ export default function AccountsPage() {
       })() : null}
     </div>
 
-    {/* ── Invoice Thermal print template — outside no-print wrapper ── */}
-    <div className="inv-thermal-print-only" style={{ background: "#fff", fontFamily: "Arial, Helvetica, sans-serif", color: "#000", fontSize: 11, width: "72mm", margin: "0 auto" }}>
-      {viewingInvoice ? (() => {
-        const inv = viewingInvoice;
-        const items = viewingInvoiceItems;
-        return (
-          <>
-            <ThermalHeader />
-            <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
-                <span style={{ fontWeight: 700 }}>Invoice #:</span>
-                <span style={{ fontFamily: "monospace", fontWeight: 800 }}>{inv.invoice_number}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
-                <span style={{ fontWeight: 700 }}>Date:</span>
-                <span>{formatDate(inv.invoice_date)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
-                <span style={{ fontWeight: 700 }}>Payment:</span>
-                <span>{inv.payment_method || "—"}</span>
-              </div>
-            </div>
-            <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-              <div style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>Customer</div>
-              <div style={{ fontWeight: 900, fontSize: 13 }}>{inv.client_name}</div>
-              {inv.client_phone ? <div style={{ fontSize: 10, marginTop: 2 }}>{inv.client_phone}</div> : null}
-            </div>
-            <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid #000" }}>
-                    <th style={{ textAlign: "left", fontWeight: 700, paddingBottom: 3, fontSize: 9 }}>Item</th>
-                    <th style={{ textAlign: "center", fontWeight: 700, paddingBottom: 3, fontSize: 9, width: 30 }}>Qty</th>
-                    <th style={{ textAlign: "right", fontWeight: 700, paddingBottom: 3, fontSize: 9, width: 55 }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, idx) => (
-                    <tr key={idx} style={{ borderBottom: "1px dotted #aaa" }}>
-                      <td style={{ paddingTop: 4, paddingBottom: 4, verticalAlign: "top" }}>
-                        <div style={{ fontWeight: 600 }}>{it.category || it.description || "—"}</div>
-                        {it.category && it.description ? (
-                          <div style={{ fontSize: 9, color: "#333", whiteSpace: "pre-wrap" }}>{it.description}</div>
-                        ) : null}
-                        {(it.width || it.height) ? <div style={{ fontSize: 9 }}>{it.width || 0}ft × {it.height || 0}ft = {it.sqft || 0} sqft</div> : null}
-                        {it.rate ? <div style={{ fontSize: 9 }}>@ {formatCurrency(it.rate)}</div> : null}
-                      </td>
-                      <td style={{ textAlign: "center", fontFamily: "monospace", paddingTop: 4, verticalAlign: "top" }}>{it.qty}</td>
-                      <td style={{ textAlign: "right", fontFamily: "monospace", fontWeight: 700, paddingTop: 4, verticalAlign: "top" }}>{formatCurrency(it.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-              {inv.previous_balance > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>Previous Balance</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.previous_balance)}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 900, fontSize: 13, marginBottom: 3 }}>
-                <span>New Bill</span>
-                <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.grand_total)}</span>
-              </div>
-              {inv.gst_amount > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>GST ({inv.gst_pct}%)</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.gst_amount)}</span>
-                </div>
-              )}
-              {inv.stax_amount > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>Sales Tax ({inv.stax_pct}%)</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.stax_amount)}</span>
-                </div>
-              )}
-              {inv.bra_amount > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>BRA ({inv.bra_pct}%)</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.bra_amount)}</span>
-                </div>
-              )}
-              {inv.previous_balance > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, marginBottom: 2, borderTop: "1px dashed #000", paddingTop: 3 }}>
-                  <span>Total Due</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.grand_total + inv.previous_balance)}</span>
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                <span>Received</span>
-                <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.amount_received)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700 }}>
-                <span>Balance Due</span>
-                <span style={{ fontFamily: "monospace" }}>{formatCurrency(inv.grand_total + inv.previous_balance - inv.amount_received)}</span>
-              </div>
-            </div>
-            <div style={{ textAlign: "center", padding: "8px 4px 6px" }}>
-              <div style={{ fontSize: 12, fontWeight: 900 }}>Thank You!</div>
-              <div style={{ fontSize: 9, marginTop: 3 }}>Auto Generated Invoice</div>
-              <div style={{ fontSize: 11, marginTop: 6, fontWeight: 700, color: "#333" }}>Software Developed by Addsmint.com</div>
-            </div>
-          </>
-        );
-      })() : null}
-    </div>
+
 
     {/* Ledger print layout — mirrors the A4 invoice template (same header, colors, borders, footer) */}
     {ledgerAccount && (
@@ -3139,7 +3018,7 @@ export default function AccountsPage() {
         <PrintHeader />
 
         {/* Title bar — matches A4 invoice */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#14532d", color: "#fff", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#075985", color: "#fff", marginBottom: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Account Ledger</span>
           <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13 }}>
             {(ledgerDateFrom.trim() || ledgerDateTo.trim())
@@ -3167,7 +3046,7 @@ export default function AccountsPage() {
               <span style={{ fontWeight: 700, fontSize: 12 }}>{formatDate(todayISO())}</span>
             </div>
             <div style={{ marginTop: 4, textAlign: "right" }}>
-              <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S.D</div>
+              <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S. Diagnostics</div>
             </div>
           </div>
         </div>
@@ -3187,7 +3066,7 @@ export default function AccountsPage() {
           return (
             <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
               {/* Header row */}
-              <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#14532d", color: "#fff" }}>
+              <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#075985", color: "#fff" }}>
                 {[
                   { label: "Date", align: "left" as const },
                   { label: "Invoice # / Ref", align: "left" as const },
@@ -3240,7 +3119,7 @@ export default function AccountsPage() {
                   style={{ display: "grid", gridTemplateColumns: gridCols, background: rowBg, borderBottom: "1px solid #000" }}
                 >
                   <div style={{ padding: cellPad, color: "#111", borderLeft: "1px solid #000" }}>{formatDate(r.date)}</div>
-                  <div style={{ padding: cellPad, fontWeight: 800, color: "#14532d", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{r.doc}</div>
+                  <div style={{ padding: cellPad, fontWeight: 800, color: "#075985", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{r.doc}</div>
                   <div style={{ padding: cellPad, color: "#111", borderLeft: "1px solid #000" }}>{r.desc}</div>
                   <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", fontWeight: 700, color: r.debit > 0 ? "#111" : "#ccc", borderLeft: "1px solid #000" }}>
                     {r.debit > 0 ? formatCurrency(r.debit) : "—"}
@@ -3263,7 +3142,7 @@ export default function AccountsPage() {
                       {/* Products header */}
                       <div style={{ display: "grid", gridTemplateColumns: itemCols, background: "#f1d6d6", borderBottom: "1px solid #000" }}>
                         {itemHeads.map((h, i) => (
-                          <div key={h.label} style={{ fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "#14532d", textAlign: h.align, padding: "2px 5px", borderLeft: i === 0 ? "none" : "1px solid #86b99a" }}>
+                          <div key={h.label} style={{ fontSize: 8.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3, color: "#075985", textAlign: h.align, padding: "2px 5px", borderLeft: i === 0 ? "none" : "1px solid #86b99a" }}>
                             {h.label}
                           </div>
                         ))}

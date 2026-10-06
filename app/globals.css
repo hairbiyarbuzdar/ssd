@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 :root {
-  /* S.S.D — white base with light green accents */
-  --blue: #15803d;
-  --blue-dark: #166534;
-  --blue-deeper: #14532d;
-  --blue-light: #bbf7d0;
-  --blue-pale: #f0fdf4;
-  --accent-green: #bbf7d0;
+  /* S.S. Diagnostics — white base with sky blue accents */
+  --blue: #0277b5;
+  --blue-dark: #0369a1;
+  --blue-deeper: #075985;
+  --blue-light: #bae6fd;
+  --blue-pale: #f0f9ff;
+  --accent-sky: #bae6fd;
   --white: #FFFFFF;
   --bg: #FFFFFF;
   --gray-50: #F8FAFB;
@@ -28,9 +28,9 @@
   --purple: #7C5CFC;
   --purple-light: #F0EDFF;
   --shadow-xs: 0 1px 3px rgba(0,0,0,.06);
-  --shadow-sm: 0 2px 8px rgba(20,83,45,.08), 0 1px 3px rgba(0,0,0,.04);
-  --shadow: 0 4px 20px rgba(20,83,45,.12), 0 2px 8px rgba(0,0,0,.05);
-  --shadow-lg: 0 12px 40px rgba(20,83,45,.16), 0 4px 16px rgba(0,0,0,.08);
+  --shadow-sm: 0 2px 8px rgba(3,105,161,.08), 0 1px 3px rgba(0,0,0,.04);
+  --shadow: 0 4px 20px rgba(3,105,161,.12), 0 2px 8px rgba(0,0,0,.05);
+  --shadow-lg: 0 12px 40px rgba(3,105,161,.16), 0 4px 16px rgba(0,0,0,.08);
   --radius: 14px;
   --radius-sm: 9px;
   --radius-xs: 6px;
@@ -85,9 +85,7 @@ input, select, textarea, button { font-family: inherit; }
 .no-print { }
 .print-only { display: none; }
 .a4-print-only { display: none; }
-.thermal-print-only { display: none; }
 .inv-a4-print-only { display: none; }
-.inv-thermal-print-only { display: none; }
 .ledger-a4-print-only { display: none; }
 .inv-print-hdr { display: none; }
 
@@ -129,25 +127,9 @@ input, select, textarea, button { font-family: inherit; }
   }
   .ledger-a4-print-only * { box-sizing: border-box; max-width: 100%; }
 
-  /* Thermal template — hidden in default A4 mode */
-  .thermal-print-only { display: none !important; }
-
-  /* Thermal mode: body.thermal-mode toggles which template is visible */
-  body.thermal-mode .a4-print-only { display: none !important; }
-  body.thermal-mode .print-only { display: none !important; }
-  body.thermal-mode .thermal-print-only {
-    display: block !important;
-    width: 72mm;
-    max-width: 72mm;
-    margin: 0 auto;
-    padding: 0;
-    box-sizing: border-box;
-  }
-
   /* Prevent any child from exceeding the page width */
   .print-only *,
-  .a4-print-only *,
-  .thermal-print-only * { box-sizing: border-box; max-width: 100%; }
+  .a4-print-only * { box-sizing: border-box; max-width: 100%; }
 
   body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
 

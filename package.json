@@ -10,6 +10,11 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
+    "db:upgrade:products": "prisma db execute --file scripts/migration-v25-product-categories.sql --schema prisma/schema.prisma",
+    "db:upgrade:stock": "prisma db execute --file scripts/migration-v26-product-stock.sql --schema prisma/schema.prisma",
+    "db:upgrade:expiry": "prisma db execute --file scripts/migration-v27-product-expiry.sql --schema prisma/schema.prisma",
+    "db:upgrade:purchases": "prisma db execute --file scripts/migration-v28-purchase-product-expiry.sql --schema prisma/schema.prisma",
+    "db:upgrade:users": "prisma db execute --file scripts/migration-v29-user-modules.sql --schema prisma/schema.prisma",
     "db:studio": "prisma studio",
     "create:admin": "node --env-file=.env scripts/create-admin.mjs"
   },

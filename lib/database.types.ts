@@ -66,6 +66,8 @@ export interface Invoice {
 }
 
 export interface InvoiceItem {
+  product_id?: string | null;
+  stock_deducted_qty?: number;
   id: string;
   invoice_id: string;
   category: string;
@@ -287,6 +289,8 @@ export interface PurchaseOrderItem {
   id: string;
   purchase_order_id: string;
   description: string;
+  product_id: string | null;
+  expiry_date: string | null;
   unit: string;
   qty: number;
   rate: number;

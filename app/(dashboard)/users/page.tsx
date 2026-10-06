@@ -8,6 +8,9 @@ import { DT } from "@/lib/dataTableStyles";
 import { Plus, Trash2, Loader2, Users, X, Eye, EyeOff, Pencil } from "lucide-react";
 import { formatDate } from "@/lib/helpers";
 
+import { ModuleAccessFields } from "@/components/ModuleAccessFields";
+import { DEFAULT_MODULES, firstAllowedPath, MODULES } from "@/lib/moduleAccess";
+
 const MAX_SUB_USERS = 5;
 
 interface SubUser {
@@ -16,6 +19,7 @@ interface SubUser {
   email: string;
   full_name: string;
   is_active: boolean;
+  modules: string[];
   created_at: string;
 }
 
@@ -27,6 +31,8 @@ export default function UsersPage() {
   const [showModal, setShowModal] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const [modules, setModules] = useState<string[]>(DEFAULT_MODULES);
+  const [editModules, setEditModules] = useState<string[]>([]);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,12 +50,11 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (profile !== null && profile.role !== "super_admin") {
-      router.replace("/quick-invoice");
+      router.replace(firstAllowedPath(profile));
     }
   }, [profile, router]);
 
   const fetchUsers = useCallback(async () => {
-    setLoading(true);
     const res = await fetch("/api/users");
     const json = await res.json();
     if (!res.ok) {
@@ -62,11 +67,12 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (profile?.role === "super_admin") {
-      void fetchUsers();
+      void Promise.resolve().then(fetchUsers);
     }
   }, [profile, fetchUsers]);
 
   function openModal() {
+    setModules([...DEFAULT_MODULES]);
     setFullName("");
     setEmail("");
     setPassword("");
@@ -78,6 +84,7 @@ export default function UsersPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setFormError("");
+    if (!modules.length) { setFormError("Select at least one module"); return; }
     if (!fullName.trim()) { setFormError("Full name is required"); return; }
     if (!email.trim() || !email.includes("@")) { setFormError("Valid email is required"); return; }
     if (password.length < 6) { setFormError("Password must be at least 6 characters"); return; }
@@ -86,7 +93,7 @@ export default function UsersPage() {
     const res = await fetch("/api/users", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: email.trim(), password, fullName: fullName.trim() }),
+      body: JSON.stringify({ email: email.trim(), password, fullName: fullName.trim(), modules }),
     });
     const json = await res.json();
     if (!res.ok) {
@@ -103,6 +110,7 @@ export default function UsersPage() {
 
   function openEdit(u: SubUser) {
     setEditTarget(u);
+    setEditModules(u.modules ?? DEFAULT_MODULES);
     setEditFullName(u.full_name);
     setEditPassword("");
     setEditShowPassword(false);
@@ -124,9 +132,11 @@ export default function UsersPage() {
     const trimmedName = editFullName.trim();
     const nameChanged = trimmedName.length > 0 && trimmedName !== editTarget.full_name;
     const passwordChanged = editPassword.length > 0;
+    const modulesChanged = [...editModules].sort().join() !== [...(editTarget.modules ?? DEFAULT_MODULES)].sort().join();
+    if (!editModules.length) { setEditError("Select at least one module"); return; }
 
-    if (!nameChanged && !passwordChanged) {
-      setEditError("Change the name or enter a new password to save.");
+    if (!nameChanged && !passwordChanged && !modulesChanged) {
+      setEditError("Change the name, password or module access to save.");
       return;
     }
     if (nameChanged && trimmedName.length === 0) {
@@ -139,7 +149,8 @@ export default function UsersPage() {
     }
 
     setEditSaving(true);
-    const body: { userId: string; fullName?: string; password?: string } = { userId: editTarget.user_id };
+    const body: { userId: string; fullName?: string; password?: string; modules?: string[] } = { userId: editTarget.user_id };
+    if (modulesChanged) body.modules = editModules;
     if (nameChanged) body.fullName = trimmedName;
     if (passwordChanged) body.password = editPassword;
 
@@ -156,6 +167,7 @@ export default function UsersPage() {
     }
 
     const parts: string[] = [];
+    if (modulesChanged) parts.push("module access");
     if (nameChanged) parts.push("name");
     if (passwordChanged) parts.push("password");
     showToast(`Updated ${parts.join(" and ")} for ${trimmedName || editTarget.full_name}`, "ok");
@@ -195,7 +207,7 @@ export default function UsersPage() {
           <div>
             <h1 className="text-xl font-extrabold m-0" style={{ color: "var(--gray-900)" }}>Sub Users</h1>
             <p className="text-xs m-0 mt-0.5" style={{ color: "var(--gray-700)" }}>
-              {users.length} / {MAX_SUB_USERS} users · Access limited to Parties, Walk-in Invoice and Cash Book (tables and entry only)
+              {users.length} / {MAX_SUB_USERS} users · Choose module access for each user
             </p>
           </div>
         </div>
@@ -257,6 +269,9 @@ export default function UsersPage() {
                         </div>
                         {u.full_name}
                       </div>
+                      <p className="text-[10px] font-normal mt-1 text-[var(--gray-600)]">
+                        {MODULES.filter(module => (u.modules ?? DEFAULT_MODULES).includes(module.id)).map(module => module.label).join(", ")}
+                      </p>
                     </td>
                     <td className={`${DT.td} ${DT.cellBody}`} style={{ color: "var(--gray-700)" }}>{u.email}</td>
                     <td className={`${DT.td} ${DT.cellBody}`} style={{ color: "var(--gray-600)" }}>{formatDate(u.created_at.split("T")[0])}</td>
@@ -266,7 +281,7 @@ export default function UsersPage() {
                           type="button"
                           onClick={() => openEdit(u)}
                           disabled={deletingId !== null || editSaving}
-                          title="Edit name or password"
+                          title="Edit user and module access"
                           className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] border-[1.5px] cursor-pointer transition-all hover:bg-[var(--blue-pale)] disabled:opacity-40"
                           style={{ borderColor: "var(--gray-200)", color: "var(--blue-deeper)" }}
                         >
@@ -355,6 +370,8 @@ export default function UsersPage() {
                   You don&apos;t need the user&apos;s current password — admin reset takes effect immediately.
                 </p>
               </div>
+
+              <ModuleAccessFields value={editModules} onChange={setEditModules} disabled={editSaving} />
 
               <div className="flex justify-end gap-2 pt-1">
                 <button type="button" disabled={editSaving} onClick={closeEdit}
@@ -455,6 +472,8 @@ export default function UsersPage() {
                   </button>
                 </div>
               </div>
+
+              <ModuleAccessFields value={modules} onChange={setModules} disabled={creating} />
 
               <div className="flex justify-end gap-2 pt-1">
                 <button

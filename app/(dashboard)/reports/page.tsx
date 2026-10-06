@@ -364,7 +364,7 @@ export default function ReportsPage() {
                   onClick={() => void handleGenerateReport()}
                   disabled={loading || dailyLoading}
                   className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-60"
-                  style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+                  style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
                 >
                   {loading || dailyLoading ? "Loading…" : "Generate report"}
                 </button>
@@ -1171,7 +1171,7 @@ export default function ReportsPage() {
             {accountFilter !== "all" && activeTab !== "paymentmethod" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
             {activeTab === "paymentmethod" && methodFilter !== "all" && <span style={{ marginLeft: 8, color: "#888" }}>· Method: {methodFilter}</span>}
           </div>
-          <div style={{ fontWeight: 900, color: "#14532d", fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>
+          <div style={{ fontWeight: 900, color: "#075985", fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>
             {{ overview: "Overview Report", account: "Account Statement", invoices: "Invoice Report", cashflow: "Cash Flow Report", dailycash: "Daily Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report" }[activeTab]}
           </div>
         </div>
@@ -1180,7 +1180,7 @@ export default function ReportsPage() {
         {(activeTab === "overview" || activeTab === "invoices") && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 18 }}>
             {[
-              { label: "Total Invoices", val: String(filteredInvoices.length), color: "#14532d" },
+              { label: "Total Invoices", val: String(filteredInvoices.length), color: "#075985" },
               { label: "Grand Total", val: formatCurrency(totalRevenue), color: "#111" },
               { label: "Amount Received", val: formatCurrency(totalCollected), color: "#16a34a" },
               { label: "Balance Due", val: formatCurrency(totalDue), color: "#dc2626" },
@@ -1197,7 +1197,7 @@ export default function ReportsPage() {
         {(activeTab === "invoices" || activeTab === "overview") && filteredInvoices.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead>
-              <tr style={{ background: "#14532d" }}>
+              <tr style={{ background: "#075985" }}>
                 {["#", "Invoice No", "Date", "Client", "Grand Total", "Received", "Balance Due", "Expense", "Profit", "Status"].map((h) => (
                   <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                 ))}
@@ -1207,7 +1207,7 @@ export default function ReportsPage() {
               {filteredInvoices.map((inv, idx) => (
                 <tr key={inv.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                   <td style={{ padding: "6px 8px", color: "#999", fontSize: 10 }}>{idx + 1}</td>
-                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{inv.invoice_number}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#075985", fontFamily: "monospace" }}>{inv.invoice_number}</td>
                   <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(inv.invoice_date)}</td>
                   <td style={{ padding: "6px 8px", fontWeight: 600 }}>{inv.client_name}</td>
                   <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right" }}>{formatCurrency(inv.grand_total)}</td>
@@ -1259,7 +1259,7 @@ export default function ReportsPage() {
         {activeTab === "cashflow" && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead>
-              <tr style={{ background: "#14532d" }}>
+              <tr style={{ background: "#075985" }}>
                 {["#", "Date", "Description", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
                   <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                 ))}
@@ -1304,7 +1304,7 @@ export default function ReportsPage() {
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
-                <tr style={{ background: "#14532d" }}>
+                <tr style={{ background: "#075985" }}>
                   {["#", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
                     <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                   ))}
@@ -1353,7 +1353,7 @@ export default function ReportsPage() {
         {activeTab === "dailyparties" && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead>
-              <tr style={{ background: "#14532d" }}>
+              <tr style={{ background: "#075985" }}>
                 {["#", "Invoice No", "Party Name", "Job / Description", "Invoice Amount", "Received", "Balance", "Status"].map((h) => (
                   <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                 ))}
@@ -1363,7 +1363,7 @@ export default function ReportsPage() {
               {dailyInvoices.map((inv, idx) => (
                 <tr key={inv.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                   <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
-                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{inv.invoice_number}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#075985", fontFamily: "monospace" }}>{inv.invoice_number}</td>
                   <td style={{ padding: "6px 8px", fontWeight: 600 }}>{inv.client_name}</td>
                   <td style={{ padding: "6px 8px", color: "#666" }}>{inv.job_name || "—"}</td>
                   <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", textAlign: "right" }}>{formatCurrency(inv.grand_total)}</td>
@@ -1386,7 +1386,7 @@ export default function ReportsPage() {
         {activeTab === "account" && accStatementWithBal.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead>
-              <tr style={{ background: "#14532d" }}>
+              <tr style={{ background: "#075985" }}>
                 {["Date", "Document #", "Description", "Debit", "Credit", "Balance", "Method"].map((h) => (
                   <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                 ))}
@@ -1396,7 +1396,7 @@ export default function ReportsPage() {
               {accStatementWithBal.map((r, idx) => (
                 <tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                   <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(r.date)}</td>
-                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#14532d", fontFamily: "monospace" }}>{r.doc}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 800, color: "#075985", fontFamily: "monospace" }}>{r.doc}</td>
                   <td style={{ padding: "6px 8px" }}>{r.desc}</td>
                   <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700, textAlign: "right", color: r.debit > 0 ? "#111" : "#ccc" }}>
                     {r.debit > 0 ? formatCurrency(r.debit) : "—"}
@@ -1437,7 +1437,7 @@ export default function ReportsPage() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                 <thead>
-                  <tr style={{ background: "#14532d" }}>
+                  <tr style={{ background: "#075985" }}>
                     {["#", "Date", "Description", "Invoice # / Ref", "Method", "Cash In", "Cash Out", "Running Balance"].map((h) => (
                       <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                     ))}
@@ -1489,7 +1489,7 @@ export default function ReportsPage() {
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead>
-                <tr style={{ background: "#14532d" }}>
+                <tr style={{ background: "#075985" }}>
                   {["#", "Expense No", "Date", "Category", "Invoice", "Method", "Amount"].map((h) => (
                     <th key={h} style={{ color: "#fff", fontWeight: 700, textAlign: h === "Amount" ? "right" : "left", padding: "7px 8px", fontSize: 10, letterSpacing: 1, textTransform: "uppercase" }}>{h}</th>
                   ))}
@@ -1499,7 +1499,7 @@ export default function ReportsPage() {
                 {expenses.map((e, idx) => (
                   <tr key={e.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                     <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
-                    <td style={{ padding: "6px 8px", fontFamily: "monospace", color: "#14532d", fontWeight: 700 }}>{e.expense_number || "—"}</td>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace", color: "#075985", fontWeight: 700 }}>{e.expense_number || "—"}</td>
                     <td style={{ padding: "6px 8px", color: "#555" }}>{formatDate(e.date)}</td>
                     <td style={{ padding: "6px 8px", fontWeight: 600 }}>{e.category || "—"}</td>
                     <td style={{ padding: "6px 8px", color: "#666" }}>{e.invoice_number || "—"}</td>

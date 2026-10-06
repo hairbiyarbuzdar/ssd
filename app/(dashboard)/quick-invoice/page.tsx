@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { db } from "@/lib/db";
+import { db, saveInvoice } from "@/lib/db";
 import { showToast } from "@/components/Toast";
 import { formatCurrency, formatDate, todayISO } from "@/lib/helpers";
 import { Plus, Printer, Trash2, FileText, Clock, X, Loader2, Download, Wallet } from "lucide-react";
@@ -15,8 +15,8 @@ import { createExpense } from "@/lib/expenses";
 import { useRouter } from "next/navigation";
 import { PrintFooter } from "@/components/PrintFooter";
 import { PrintHeader } from "@/components/PrintHeader";
-import { ThermalHeader } from "@/components/ThermalHeader";
 import { useUser } from "@/lib/UserContext";
+import { ProductExpiryNotice } from "@/components/ProductExpiryNotice";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { confirmDialog } from "@/components/ConfirmModal";
 import { logActivity } from "@/lib/activityLog";
@@ -25,6 +25,7 @@ import { ProductCreateModal } from "@/components/ProductCreateModal";
 interface Item {
   lineType: "product" | "labor";
   product: string;
+  productId?: string | null;
   laborType: string;
   description: string;
   width: number;
@@ -158,7 +159,7 @@ export default function InvoicePage() {
   const userProfile = useUser();
   const router = useRouter();
   const { methods: paymentMethods } = usePaymentMethods();
-  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null }[]>([]);
+  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }[]>([]);
   const [nextNum, setNextNum] = useState(1);
   const [savedInvoices, setSavedInvoices] = useState<SavedInvoice[]>([]);
   const [allAccounts, setAllAccounts] = useState<{ id: string; name: string; category: string }[]>([]);
@@ -177,10 +178,6 @@ export default function InvoicePage() {
   const [printingPdfFor, setPrintingPdfFor] = useState<string | null>(null);
   const [draftPdfBusy, setDraftPdfBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [showPrintTypeModal, setShowPrintTypeModal] = useState(false);
-  const [selectedPrintType, setSelectedPrintType] = useState<"thermal" | "a4">("a4");
-  const selectedPrintTypeRef = useRef<"thermal" | "a4">("a4");
-  const pendingPrintFnRef = useRef<(() => Promise<void>) | null>(null);
   const [walkInDash, setWalkInDash] = useState<WalkInDashStats>(EMPTY_WALK_IN_DASH);
   const [walkInDashLoading, setWalkInDashLoading] = useState(true);
 
@@ -331,7 +328,7 @@ export default function InvoicePage() {
   }, []);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date");
     if (data) {
       const sorted = [...data].sort((a, b) => {
         const an = parseInt(String(a.code ?? ""), 10);
@@ -359,8 +356,9 @@ export default function InvoicePage() {
   // Tracks products inserted via the inline modal during this draft. Deleted if the
   // user cancels the invoice; cleared (kept) if the invoice saves successfully.
   const pendingProductIdsRef = useRef<string[]>([]);
+  const invoiceSaveRef = useRef(false);
 
-  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null }) => {
+  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }) => {
     pendingProductIdsRef.current.push(newProduct.id);
     await fetchProducts();
     const idx = productCreate?.idx;
@@ -375,6 +373,7 @@ export default function InvoicePage() {
       let item: Item = {
         ...cur,
         product: newProduct.name,
+        productId: newProduct.id,
         rate: Number(newProduct.sale_price) || 0,
         pricingType: isStandalone ? "standalone" : "sqft",
       };
@@ -447,7 +446,7 @@ export default function InvoicePage() {
     }
     const { data: rows, error: itemErr } = await db
       .from("invoice_items")
-      .select("category, description, width, height, sqft, rate, qty, amount")
+      .select("product_id, category, description, width, height, sqft, rate, qty, amount")
       .eq("invoice_id", inv.id)
       .order("id", { ascending: true });
     if (itemErr) {
@@ -461,6 +460,7 @@ export default function InvoicePage() {
       return {
         lineType: "product" as const,
         product: productName,
+        productId: r.product_id ? String(r.product_id) : dbProd?.id ?? null,
         laborType: "",
         description: String(r.description ?? ""),
         width: Number(r.width) || 0,
@@ -489,100 +489,159 @@ export default function InvoicePage() {
   }
 
   async function handleSave() {
-    if (!draft) return;
+    if (invoiceSaveRef.current) return;
+    invoiceSaveRef.current = true;
+    try {
+      if (!draft) return;
 
-    const clientName = draft.clientName.trim() || "Walk-in Customer";
-    if (draft.items.some((it) => Number(it.qty) < 1)) {
-      showToast("Each item must have a quantity of at least 1", "err");
-      return;
-    }
-    const { subtotal, discountAmount, grandTotal, amountReceived, balanceDue, paymentStatus } = computeWalkInPayment(draft);
-    if (grandTotal <= 0) {
-      showToast("Add at least one item with a value", "err");
-      return;
-    }
-    if (amountReceived > 0) {
-      if (!draft.payMethod || !draft.payMethod.trim()) {
-        showToast("Please select a payment method", "err"); return;
-      }
-      if (!paymentMethods.some((m) => m.name === draft.payMethod)) {
-        showToast("Select a valid payment method", "err"); return;
-      }
-    }
-
-    setSaving(true);
-    const today = todayISO();
-    const inv = draft;
-    // Walk-in invoices never carry a party's previous balance — they are independent of party accounts
-    const previousBalance = 0;
-
-    let finalInvoiceId = inv.editingInvoiceId ?? "";
-    // For a create, this is overwritten with the server-confirmed number once
-    // the invoices row is inserted (the server assigns it atomically — see
-    // createInvoiceWithUniqueNumber in app/api/db/route.ts). Unchanged on edit.
-    let finalInvoiceNumber = inv.invoiceNumber;
-    if (inv.editingInvoiceId) {
-      const { data: current } = await db
-        .from("invoices")
-        .select("amount_received")
-        .eq("id", inv.editingInvoiceId)
-        .single();
-      const keepReceived = Math.min(Math.max(0, Number(current?.amount_received) || 0), grandTotal);
-      const keepBalance = Math.round((grandTotal - keepReceived) * 100) / 100;
-      const keepStatus: "unpaid" | "partial" | "paid" =
-        keepBalance <= 0 ? "paid" : keepReceived > 0 ? "partial" : "unpaid";
-      const { error: updErr } = await db
-        .from("invoices")
-        .update({
-          invoice_number: inv.invoiceNumber,
-          client_name: clientName,
-          client_phone: inv.clientPhone.trim(),
-          subtotal,
-          grand_total: grandTotal,
-          previous_balance: previousBalance,
-          amount_received: keepReceived,
-          balance_due: keepBalance,
-          payment_status: keepStatus,
-          payment_method: inv.payMethod,
-          discount_type: inv.discountType,
-          discount_value: parseFloat(inv.discountValue) || 0,
-          discount_amount: discountAmount,
-          job_notes: inv.description.trim(),
-        })
-        .eq("id", inv.editingInvoiceId);
-      if (updErr) {
-        showToast(updErr.message, "err");
-        setSaving(false);
+      const clientName = draft.clientName.trim() || "Walk-in Customer";
+      if (draft.items.some((it) => Number(it.qty) < 1)) {
+        showToast("Each item must have a quantity of at least 1", "err");
         return;
       }
-      await db.from("invoice_items").delete().eq("invoice_id", inv.editingInvoiceId);
-      await db.from("invoice_items").insert(
-        inv.items.map((it) => ({
-          invoice_id: inv.editingInvoiceId!,
-            category: it.lineType === "labor" ? "Labor" : it.product,
-            description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-          width: it.width,
-          height: it.height,
-          sqft: it.sqft,
-          rate: it.rate,
-          qty: it.qty,
-          amount: it.total,
-        }))
-      );
-      const { data: qRows } = await db
-        .from("quick_invoices")
-        .select("id")
-        .eq("invoice_number", inv.invoiceNumber)
-        .limit(1);
-      const qid = qRows?.[0]?.id;
-      if (qid) {
-        await db.from("quick_invoices").update({ client_name: clientName, grand_total: grandTotal }).eq("id", qid);
-        await db.from("quick_invoice_items").delete().eq("quick_invoice_id", qid);
-        await db.from("quick_invoice_items").insert(
+      const { subtotal, discountAmount, grandTotal, amountReceived, balanceDue, paymentStatus } = computeWalkInPayment(draft);
+      if (grandTotal <= 0) {
+        showToast("Add at least one item with a value", "err");
+        return;
+      }
+      if (amountReceived > 0) {
+        if (!draft.payMethod || !draft.payMethod.trim()) {
+          showToast("Please select a payment method", "err"); return;
+        }
+        if (!paymentMethods.some((m) => m.name === draft.payMethod)) {
+          showToast("Select a valid payment method", "err"); return;
+        }
+      }
+
+      const stockItems = draft.items.map(it => ({
+        product_id: it.lineType === "product" ? (it.productId ?? products.find(p => p.name === it.product)?.id ?? null) : null,
+        category: it.lineType === "labor" ? "Labor" : it.product,
+        description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+        width: it.width, height: it.height, sqft: it.sqft, rate: it.rate, qty: it.qty, amount: it.total,
+      }));
+
+      setSaving(true);
+      const today = todayISO();
+      const inv = draft;
+      // Walk-in invoices never carry a party's previous balance — they are independent of party accounts
+      const previousBalance = 0;
+
+      let finalInvoiceId = inv.editingInvoiceId ?? "";
+      // For a create, this is overwritten with the server-confirmed number once
+      // the invoices row is inserted (the server assigns it atomically — see
+      // createInvoiceWithUniqueNumber in app/api/db/route.ts). Unchanged on edit.
+      let finalInvoiceNumber = inv.invoiceNumber;
+      if (inv.editingInvoiceId) {
+        const { data: current } = await db
+          .from("invoices")
+          .select("amount_received")
+          .eq("id", inv.editingInvoiceId)
+          .single();
+        const keepReceived = Math.min(Math.max(0, Number(current?.amount_received) || 0), grandTotal);
+        const keepBalance = Math.round((grandTotal - keepReceived) * 100) / 100;
+        const keepStatus: "unpaid" | "partial" | "paid" =
+          keepBalance <= 0 ? "paid" : keepReceived > 0 ? "partial" : "unpaid";
+        const { error: updErr } = await saveInvoice({
+            invoice_number: inv.invoiceNumber,
+            client_name: clientName,
+            client_phone: inv.clientPhone.trim(),
+            subtotal,
+            grand_total: grandTotal,
+            previous_balance: previousBalance,
+            amount_received: keepReceived,
+            balance_due: keepBalance,
+            payment_status: keepStatus,
+            payment_method: inv.payMethod,
+            discount_type: inv.discountType,
+            discount_value: parseFloat(inv.discountValue) || 0,
+            discount_amount: discountAmount,
+            job_notes: inv.description.trim(),
+          }, stockItems, inv.editingInvoiceId);
+        if (updErr) {
+          showToast(updErr.message, "err");
+          setSaving(false);
+          return;
+        }
+
+
+        const { data: qRows } = await db
+          .from("quick_invoices")
+          .select("id")
+          .eq("invoice_number", inv.invoiceNumber)
+          .limit(1);
+        const qid = qRows?.[0]?.id;
+        if (qid) {
+          await db.from("quick_invoices").update({ client_name: clientName, grand_total: grandTotal }).eq("id", qid);
+          await db.from("quick_invoice_items").delete().eq("quick_invoice_id", qid);
+          await db.from("quick_invoice_items").insert(
+            inv.items.map((it) => ({
+              quick_invoice_id: qid,
+              product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
+              description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+              width: it.width,
+              height: it.height,
+              total_size: it.sqft,
+              rate_per_sqft: it.rate,
+              total: it.total,
+              qty: it.qty,
+              grand_total: it.total,
+            }))
+          );
+        }
+      } else {
+        // Save the invoice, canonical items, and stock together — the server assigns invoice_number atomically
+        // (with retry on collision), so this is the single source of truth for
+        // the number. Whatever `inv.invoiceNumber` shows on screen is only a
+        // preview; the confirmed number below is what actually gets saved.
+        const { data: invData, error: invErr } = await saveInvoice({
+            invoice_number: inv.invoiceNumber,
+            client_name: clientName,
+            client_phone: inv.clientPhone.trim(),
+            invoice_date: today,
+            subtotal,
+            grand_total: grandTotal,
+            previous_balance: previousBalance,
+            amount_received: amountReceived,
+            balance_due: balanceDue,
+            payment_status: paymentStatus,
+            payment_method: inv.payMethod,
+            discount_type: inv.discountType,
+            discount_value: parseFloat(inv.discountValue) || 0,
+            discount_amount: discountAmount,
+            gst_pct: 0,
+            gst_amount: 0,
+            stax_pct: 0,
+            stax_amount: 0,
+            job_notes: inv.description.trim(),
+            is_walk_in: true,
+          }, stockItems);
+
+        if (invErr) {
+          showToast(invErr.message, "err");
+          setSaving(false);
+          return;
+        }
+
+        finalInvoiceId = invData.id;
+        finalInvoiceNumber = invData.invoice_number;
+        pendingProductIdsRef.current = [];
+        setDraft(current => current ? { ...current, editingInvoiceId: invData.id, invoiceNumber: invData.invoice_number } : null);
+
+
+
+        // Mirror into quick_invoices (legacy/parallel storage — no unique
+        // constraint here) using the CONFIRMED number so both tables agree.
+        const { data: qiRows } = await db
+          .from("quick_invoices")
+          .insert({ invoice_number: finalInvoiceNumber, client_name: clientName, grand_total: grandTotal })
+          .select();
+        const qiData = qiRows?.[0] ?? null;
+
+        if (qiData) await db.from("quick_invoice_items").insert(
           inv.items.map((it) => ({
-            quick_invoice_id: qid,
-            product: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
-            description: it.lineType === "labor" ? it.laborType : it.description.trim(),
+            quick_invoice_id: qiData.id,
+            product: it.product,
+            description: it.description.trim(),
             width: it.width,
             height: it.height,
             total_size: it.sqft,
@@ -593,132 +652,61 @@ export default function InvoicePage() {
           }))
         );
       }
-    } else {
-      // Insert `invoices` FIRST — the server assigns invoice_number atomically
-      // (with retry on collision), so this is the single source of truth for
-      // the number. Whatever `inv.invoiceNumber` shows on screen is only a
-      // preview; the confirmed number below is what actually gets saved.
-      const { data: invData, error: invErr } = await db
-        .from("invoices")
-        .insert({
-          invoice_number: inv.invoiceNumber,
-          client_name: clientName,
-          client_phone: inv.clientPhone.trim(),
-          invoice_date: today,
-          subtotal,
-          grand_total: grandTotal,
-          previous_balance: previousBalance,
-          amount_received: amountReceived,
-          balance_due: balanceDue,
-          payment_status: paymentStatus,
-          payment_method: inv.payMethod,
-          discount_type: inv.discountType,
-          discount_value: parseFloat(inv.discountValue) || 0,
-          discount_amount: discountAmount,
-          gst_pct: 0,
-          gst_amount: 0,
-          stax_pct: 0,
-          stax_amount: 0,
-          job_notes: inv.description.trim(),
-          is_walk_in: true,
-        })
-        .select()
-        .single();
 
-      if (invErr) {
-        showToast(invErr.message, "err");
-        setSaving(false);
-        return;
+      if (!inv.editingInvoiceId && finalInvoiceId && amountReceived > 0) {
+        const { error: cbErr } = await db.from("cashbook").insert({
+          type: "in",
+          description: `Walk-in ${finalInvoiceNumber} — ${clientName}`,
+          amount: amountReceived,
+          date: today,
+          account_name: "",
+          method: inv.payMethod,
+          reference: finalInvoiceId,
+        });
+        if (cbErr) {
+          showToast(cbErr.message, "err");
+          setSaving(false);
+          return;
+        }
       }
 
-      finalInvoiceId = invData.id;
-      finalInvoiceNumber = invData.invoice_number;
-
-      await db.from("invoice_items").insert(
-        inv.items.map((it) => ({
-          invoice_id: invData.id,
-          category: it.lineType === "labor" ? "Labor" : it.product,
-          description: it.lineType === "labor" ? it.laborType : it.description.trim(),
-          width: it.width,
-          height: it.height,
-          sqft: it.sqft,
-          rate: it.rate,
-          qty: it.qty,
-          amount: it.total,
-        }))
-      );
-
-      // Mirror into quick_invoices (legacy/parallel storage — no unique
-      // constraint here) using the CONFIRMED number so both tables agree.
-      const { data: qiRows } = await db
-        .from("quick_invoices")
-        .insert({ invoice_number: finalInvoiceNumber, client_name: clientName, grand_total: grandTotal })
-        .select();
-      const qiData = qiRows?.[0] ?? null;
-
-      if (qiData) await db.from("quick_invoice_items").insert(
-        inv.items.map((it) => ({
-          quick_invoice_id: qiData.id,
-          product: it.product,
-          description: it.description.trim(),
-          width: it.width,
-          height: it.height,
-          total_size: it.sqft,
-          rate_per_sqft: it.rate,
-          total: it.total,
-          qty: it.qty,
-          grand_total: it.total,
-        }))
-      );
-    }
-
-    if (!inv.editingInvoiceId && finalInvoiceId && amountReceived > 0) {
-      const { error: cbErr } = await db.from("cashbook").insert({
-        type: "in",
-        description: `Walk-in ${finalInvoiceNumber} — ${clientName}`,
-        amount: amountReceived,
-        date: today,
-        account_name: "",
-        method: inv.payMethod,
-        reference: finalInvoiceId,
-      });
-      if (cbErr) {
-        showToast(cbErr.message, "err");
-        setSaving(false);
-        return;
+      // If flagged, create a PENDING expense (amount 0, no cash entry yet) linked
+      // to this invoice, then send the user to the Expense module to fill in the
+      // amount/category — that's where the cash-out gets recorded.
+      let goToExpense = false;
+      if (!inv.editingInvoiceId && finalInvoiceId && inv.addToExpense) {
+        const { error: expErr } = await createExpense({
+          category: "",
+          description: `${finalInvoiceNumber} · ${clientName}`,
+          amount: 0,
+          method: inv.payMethod,
+          date: today,
+          invoiceId: finalInvoiceId,
+          invoiceNumber: finalInvoiceNumber,
+        });
+        if (expErr) {
+          showToast(expErr, "err");
+          setSaving(false);
+          return;
+        }
+        goToExpense = true;
       }
-    }
 
-    // If flagged, create a PENDING expense (amount 0, no cash entry yet) linked
-    // to this invoice, then send the user to the Expense module to fill in the
-    // amount/category — that's where the cash-out gets recorded.
-    let goToExpense = false;
-    if (!inv.editingInvoiceId && finalInvoiceId && inv.addToExpense) {
-      const { error: expErr } = await createExpense({
-        category: "",
-        description: `${finalInvoiceNumber} · ${clientName}`,
-        amount: 0,
-        method: inv.payMethod,
-        date: today,
-        invoiceId: finalInvoiceId,
-        invoiceNumber: finalInvoiceNumber,
-      });
-      if (expErr) {
-        showToast(expErr, "err");
-        setSaving(false);
-        return;
-      }
-      goToExpense = true;
-    }
+      showToast(inv.editingInvoiceId ? `Invoice ${finalInvoiceNumber} updated!` : `Invoice ${finalInvoiceNumber} saved!`, "ok");
+      pendingProductIdsRef.current = [];
+      setDraft(null);
+      setSaving(false);
+      refreshCount();
+      fetchSaved();
+      void refreshWalkInStats();
+      if (goToExpense) router.push("/expense");
 
-    showToast(inv.editingInvoiceId ? `Invoice ${finalInvoiceNumber} updated!` : `Invoice ${finalInvoiceNumber} saved!`, "ok");
-    pendingProductIdsRef.current = [];
-    setDraft(null);
-    setSaving(false);
-    refreshCount();
-    fetchSaved();
-    void refreshWalkInStats();
-    if (goToExpense) router.push("/expense");
+    } catch {
+      showToast("Could not finish invoice save. Reload the invoice list before retrying.", "err");
+    } finally {
+      invoiceSaveRef.current = false;
+      setSaving(false);
+    }
   }
 
   const STATUS = {
@@ -735,7 +723,7 @@ export default function InvoicePage() {
     }
     const { data: rows, error: itemErr } = await db
       .from("invoice_items")
-      .select("category, description, width, height, sqft, rate, qty, amount")
+      .select("product_id, category, description, width, height, sqft, rate, qty, amount")
       .eq("invoice_id", invId)
       .order("id", { ascending: true });
     if (itemErr) {
@@ -779,7 +767,7 @@ export default function InvoicePage() {
   async function fetchInvoicePdfItems(invId: string): Promise<InvoicePdfPayload["items"]> {
     const { data: rows, error } = await db
       .from("invoice_items")
-      .select("category, description, width, height, sqft, rate, qty, amount")
+      .select("product_id, category, description, width, height, sqft, rate, qty, amount")
       .eq("invoice_id", invId)
       .order("id", { ascending: true });
     if (error) throw new Error(error.message);
@@ -928,60 +916,31 @@ export default function InvoicePage() {
     }
   }
 
-  /** Show the print-type picker, then execute the actual print when the user selects a format. */
   function requestPrint(fn: () => Promise<void>) {
-    pendingPrintFnRef.current = fn;
-    setShowPrintTypeModal(true);
+    void fn();
   }
 
-  async function confirmPrint(type: "thermal" | "a4") {
-    selectedPrintTypeRef.current = type;
-    setSelectedPrintType(type);
-    setShowPrintTypeModal(false);
-    if (pendingPrintFnRef.current) {
-      await pendingPrintFnRef.current();
-      pendingPrintFnRef.current = null;
-    }
-  }
-
-  function applyPrintMode(type: "thermal" | "a4") {
+  function applyPrintMode() {
     const a4El = document.querySelector(".a4-print-only") as HTMLElement | null;
-    const thEl = document.querySelector(".thermal-print-only") as HTMLElement | null;
-    if (type === "thermal") {
-      if (a4El) a4El.style.setProperty("display", "none", "important");
-      if (thEl) thEl.style.setProperty("display", "block", "important");
-      const el = document.createElement("style");
-      el.id = "__thermal_page_style";
-      el.textContent = "@page { size: 80mm auto; margin: 2mm 3mm; }";
-      document.head.appendChild(el);
-      document.body.classList.add("thermal-mode");
-    } else {
-      if (thEl) thEl.style.setProperty("display", "none", "important");
-      if (a4El) {
-        // Flex column + A4 min-height pins the footer to the bottom of the page
-        // even when the invoice has only a few line items.
-        a4El.style.setProperty("display", "flex", "important");
-        a4El.style.setProperty("flex-direction", "column", "important");
-        a4El.style.setProperty("min-height", "273mm", "important");
-      }
-      const el = document.createElement("style");
-      el.id = "__a4_page_style";
-      el.textContent = "@page { size: A4 portrait; margin: 12mm 14mm; }";
-      document.head.appendChild(el);
+    if (a4El) {
+      a4El.style.setProperty("display", "flex", "important");
+      a4El.style.setProperty("flex-direction", "column", "important");
+      a4El.style.setProperty("min-height", "273mm", "important");
     }
+    const el = document.createElement("style");
+    el.id = "__a4_page_style";
+    el.textContent = "@page { size: A4 portrait; margin: 12mm 14mm; }";
+    document.head.appendChild(el);
   }
+
   function restorePrintMode() {
-    document.getElementById("__thermal_page_style")?.remove();
     document.getElementById("__a4_page_style")?.remove();
-    document.body.classList.remove("thermal-mode");
     const a4El = document.querySelector(".a4-print-only") as HTMLElement | null;
-    const thEl = document.querySelector(".thermal-print-only") as HTMLElement | null;
     if (a4El) {
       a4El.style.removeProperty("display");
       a4El.style.removeProperty("flex-direction");
       a4El.style.removeProperty("min-height");
     }
-    if (thEl) thEl.style.removeProperty("display");
   }
 
   async function printSavedInvoicePdf(inv: SavedInvoice) {
@@ -1023,7 +982,7 @@ export default function InvoicePage() {
       };
       setInvoicePdfData(payload);
       await new Promise((r) => setTimeout(r, 200));
-      applyPrintMode(selectedPrintTypeRef.current);
+      applyPrintMode();
       scheduleAfterPrint(() => {
         restorePrintMode();
         setInvoicePdfData(null);
@@ -1089,7 +1048,7 @@ export default function InvoicePage() {
     }
     const { data: itemRows, error: itemErr } = await db
       .from("invoice_items")
-      .select("category, description, width, height, sqft, rate, qty, amount")
+      .select("product_id, category, description, width, height, sqft, rate, qty, amount")
       .eq("invoice_id", inv.id)
       .order("id", { ascending: true });
     if (itemErr) {
@@ -1140,7 +1099,7 @@ export default function InvoicePage() {
     try {
       setInvoicePdfData(draftToPdfPayload(draft));
       await new Promise((r) => setTimeout(r, 200));
-      applyPrintMode(selectedPrintTypeRef.current);
+      applyPrintMode();
       scheduleAfterPrint(() => {
         restorePrintMode();
         setInvoicePdfData(null);
@@ -1202,7 +1161,7 @@ export default function InvoicePage() {
           type="button"
           onClick={openModal}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
-          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
         >
           <Plus size={14} /> New Invoice
         </button>
@@ -1352,7 +1311,7 @@ export default function InvoicePage() {
                                     disabled={busy}
                                     title="Pay remaining balance — updates invoice, cashbook, and party account when linked"
                                     className="inline-flex items-center justify-center gap-0.5 px-1.5 h-8 rounded-[8px] border-none cursor-pointer text-[10px] font-bold disabled:opacity-45 disabled:cursor-not-allowed"
-                                    style={{ background: "var(--green-light)", color: "var(--green)" }}
+                                    style={{ background: "var(--blue-light)", color: "var(--blue)" }}
                                   >
                                     <Wallet size={12} /> Pay
                                   </button>
@@ -1363,7 +1322,7 @@ export default function InvoicePage() {
                                   disabled={busy}
                                   title="WhatsApp — to saved number if set, else you pick the contact"
                                   className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] border-[1.5px] cursor-pointer transition-all hover:bg-[var(--gray-50)] disabled:opacity-45 disabled:cursor-not-allowed"
-                                  style={{ borderColor: "var(--gray-200)", color: "#128C7E" }}
+                                  style={{ borderColor: "var(--gray-200)", color: "#0277b5" }}
                                 >
                                   <WhatsAppGlyph size={15} />
                                 </button>
@@ -1529,14 +1488,14 @@ export default function InvoicePage() {
       ) : null}
     </div>
 
-      {/* ── A4 print template — hidden on screen, shown when printing (non-thermal) ── */}
+      {/* ── A4 print template — hidden on screen, shown when printing (A4) ── */}
       <div ref={invoicePdfRef} className="a4-print-only" style={{ background: "#fff", fontFamily: "Arial, Helvetica, sans-serif", color: "#111", fontSize: 11, paddingBottom: 12 }}>
         {invoicePdfData ? (
           <>
             <PrintHeader />
 
             {/* Title bar */}
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 16, padding: "5px 12px", background: "#14532d", color: "#fff", marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 16, padding: "5px 12px", background: "#075985", color: "#fff", marginBottom: 10 }}>
               <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Invoice</span>
               <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 13 }}>|</span>
               <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13 }}>{invoicePdfData.invoice.invoice_number}</span>
@@ -1562,7 +1521,7 @@ export default function InvoicePage() {
                   <span style={{ fontWeight: 700, fontSize: 12 }}>{formatDate(invoicePdfData.invoice.invoice_date)}</span>
                 </div>
                 <div style={{ marginTop: 4, textAlign: "right" }}>
-                  <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S.D</div>
+                  <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S. Diagnostics</div>
                 </div>
               </div>
             </div>
@@ -1574,7 +1533,7 @@ export default function InvoicePage() {
               return (
                 <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
                   {/* Header row */}
-                  <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#14532d", color: "#fff" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#075985", color: "#fff" }}>
                     {[
                       { label: "SN", align: "center" as const },
                       { label: "Description", align: "left" as const },
@@ -1670,125 +1629,7 @@ export default function InvoicePage() {
         ) : null}
       </div>
 
-      {/* ── Thermal / POS print template — shown only in thermal-mode ── */}
-      <div className="thermal-print-only" style={{ background: "#fff", fontFamily: "Arial, Helvetica, sans-serif", color: "#000", fontSize: 11, width: "72mm", margin: "0 auto" }}>
-        {invoicePdfData ? (() => {
-          return (
-            <>
-              <ThermalHeader />
 
-              {/* Invoice # + Date */}
-              <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10 }}>
-                  <span style={{ fontWeight: 700 }}>Invoice #:</span>
-                  <span style={{ fontFamily: "monospace", fontWeight: 800 }}>{invoicePdfData.invoice.invoice_number}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
-                  <span style={{ fontWeight: 700 }}>Date:</span>
-                  <span>{formatDate(invoicePdfData.invoice.invoice_date)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, marginTop: 2 }}>
-                  <span style={{ fontWeight: 700 }}>Payment:</span>
-                  <span>{invoicePdfData.invoice.payment_method}</span>
-                </div>
-              </div>
-
-              {/* Customer */}
-              <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-                <div style={{ fontSize: 8, textTransform: "uppercase", letterSpacing: 0.8 }}>Customer</div>
-                <div style={{ fontWeight: 900, fontSize: 13 }}>{invoicePdfData.invoice.client_name}</div>
-                {invoicePdfData.invoice.client_phone ? (
-                  <div style={{ fontSize: 10, marginTop: 2 }}>{invoicePdfData.invoice.client_phone}</div>
-                ) : null}
-              </div>
-
-              {/* Items */}
-              <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #000" }}>
-                      <th style={{ textAlign: "left", fontWeight: 700, paddingBottom: 3, fontSize: 9 }}>Item</th>
-                      <th style={{ textAlign: "center", fontWeight: 700, paddingBottom: 3, fontSize: 9, width: 30 }}>Qty</th>
-                      <th style={{ textAlign: "right", fontWeight: 700, paddingBottom: 3, fontSize: 9, width: 55 }}>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoicePdfData.items.map((it, idx) => (
-                      <tr key={idx} style={{ borderBottom: "1px dotted #aaa" }}>
-                        <td style={{ paddingTop: 4, paddingBottom: 4, verticalAlign: "top" }}>
-                          <div style={{ fontWeight: 600 }}>{it.category || "—"}</div>
-                          {it.description ? (
-                            <div style={{ fontSize: 9, color: "#333", whiteSpace: "pre-wrap" }}>{it.description}</div>
-                          ) : null}
-                          {(it.width || it.height) ? (
-                            <div style={{ fontSize: 9 }}>{it.width || 0}ft × {it.height || 0}ft = {it.sqft || 0} sqft</div>
-                          ) : null}
-                          {it.rate ? <div style={{ fontSize: 9 }}>@ {formatCurrency(it.rate)}</div> : null}
-                        </td>
-                        <td style={{ textAlign: "center", fontFamily: "monospace", paddingTop: 4, verticalAlign: "top" }}>{it.qty}</td>
-                        <td style={{ textAlign: "right", fontFamily: "monospace", fontWeight: 700, paddingTop: 4, verticalAlign: "top" }}>{formatCurrency(it.amount)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Totals */}
-              <div style={{ padding: "5px 4px", borderBottom: "1px dashed #000" }}>
-                {invoicePdfData.invoice.previous_balance > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                    <span>Previous Balance</span>
-                    <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.previous_balance)}</span>
-                  </div>
-                )}
-                <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 900, fontSize: 13, marginBottom: 3 }}>
-                  <span>New Bill</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.grand_total)}</span>
-                </div>
-                {invoicePdfData.invoice.gst_amount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                    <span>GST ({invoicePdfData.invoice.gst_pct}%)</span>
-                    <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.gst_amount)}</span>
-                  </div>
-                )}
-                {invoicePdfData.invoice.stax_amount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                    <span>Sales Tax ({invoicePdfData.invoice.stax_pct}%)</span>
-                    <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.stax_amount)}</span>
-                  </div>
-                )}
-                {invoicePdfData.invoice.bra_amount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                    <span>BRA ({invoicePdfData.invoice.bra_pct}%)</span>
-                    <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.bra_amount)}</span>
-                  </div>
-                )}
-                {invoicePdfData.invoice.previous_balance > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700, marginBottom: 2, borderTop: "1px dashed #000", paddingTop: 3 }}>
-                    <span>Total Due</span>
-                    <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.grand_total + invoicePdfData.invoice.previous_balance)}</span>
-                  </div>
-                )}
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 2 }}>
-                  <span>Received</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.amount_received)}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700 }}>
-                  <span>Balance Due</span>
-                  <span style={{ fontFamily: "monospace" }}>{formatCurrency(invoicePdfData.invoice.grand_total + invoicePdfData.invoice.previous_balance - invoicePdfData.invoice.amount_received)}</span>
-                </div>
-              </div>
-
-              {/* Thank you */}
-              <div style={{ textAlign: "center", padding: "8px 4px 6px" }}>
-                <div style={{ fontSize: 12, fontWeight: 900 }}>Thank You!</div>
-                <div style={{ fontSize: 9, marginTop: 3 }}>Auto Generated Invoice</div>
-                <div style={{ fontSize: 11, marginTop: 6, fontWeight: 700, color: "#333" }}>Software Developed by Addsmint.com</div>
-              </div>
-            </>
-          );
-        })() : null}
-      </div>
 
       {draft && (
         <WalkInInvoiceModal
@@ -1815,92 +1656,7 @@ export default function InvoicePage() {
         />
       )}
 
-      {/* Print Type Picker */}
-      {showPrintTypeModal && (
-        <div
-          className="fixed inset-0 z-[900] flex items-center justify-center backdrop-blur-sm px-4"
-          style={{ background: "rgba(10,30,50,.45)" }}
-          onClick={() => { setShowPrintTypeModal(false); pendingPrintFnRef.current = null; }}
-        >
-          <div
-            className="bg-white rounded-[20px] w-[min(420px,100%)] overflow-hidden animate-slide-up"
-            style={{ boxShadow: "var(--shadow-lg)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div
-              className="flex items-center justify-between px-5 py-4 border-b border-[var(--gray-100)]"
-              style={{ background: "linear-gradient(90deg, var(--blue-deeper), var(--blue-dark))" }}
-            >
-              <div>
-                <h2 className="text-[15px] font-bold text-white">Select Print Format</h2>
-                <p className="text-[11px] mt-0.5 text-white/60">Choose how you want to print this invoice</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => { setShowPrintTypeModal(false); pendingPrintFnRef.current = null; }}
-                className="w-7 h-7 rounded-full flex items-center justify-center border-none cursor-pointer"
-                style={{ background: "rgba(255,255,255,0.15)", color: "white" }}
-              >
-                <X size={12} />
-              </button>
-            </div>
 
-            {/* Options */}
-            <div className="p-5 grid grid-cols-2 gap-3">
-              {/* Thermal */}
-              <button
-                type="button"
-                onClick={() => void confirmPrint("thermal")}
-                className="flex flex-col items-center gap-3 p-5 rounded-[14px] border-2 cursor-pointer transition-all hover:border-[var(--blue-deeper)] hover:bg-[var(--blue-pale)] group"
-                style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)" }}
-              >
-                {/* Thermal receipt icon */}
-                <div
-                  className="w-12 h-14 rounded-[6px] flex flex-col items-center justify-end pb-1 gap-[3px]"
-                  style={{ background: "white", boxShadow: "0 2px 8px rgba(0,0,0,0.12)", border: "1.5px solid var(--gray-200)" }}
-                >
-                  {[40, 60, 50, 40, 55].map((w, i) => (
-                    <div key={i} className="rounded-full" style={{ width: `${w}%`, height: 2, background: "var(--gray-300)" }} />
-                  ))}
-                  <div className="rounded-full mt-1" style={{ width: "70%", height: 2.5, background: "var(--blue-deeper)" }} />
-                </div>
-                <div className="text-center">
-                  <div className="text-[13px] font-bold" style={{ color: "var(--gray-900)" }}>Thermal</div>
-                  <div className="text-[11px] mt-0.5" style={{ color: "var(--gray-500)" }}>Narrow receipt roll</div>
-                </div>
-              </button>
-
-              {/* A4 */}
-              <button
-                type="button"
-                onClick={() => void confirmPrint("a4")}
-                className="flex flex-col items-center gap-3 p-5 rounded-[14px] border-2 cursor-pointer transition-all hover:border-[var(--blue-deeper)] hover:bg-[var(--blue-pale)] group"
-                style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)" }}
-              >
-                {/* A4 page icon */}
-                <div
-                  className="w-10 h-14 rounded-[4px] flex flex-col items-start justify-start p-1.5 gap-[3px]"
-                  style={{ background: "white", boxShadow: "0 2px 8px rgba(0,0,0,0.12)", border: "1.5px solid var(--gray-200)" }}
-                >
-                  <div className="rounded-full w-full" style={{ height: 2.5, background: "var(--blue-deeper)" }} />
-                  {[100, 80, 90, 70, 85, 75, 60].map((w, i) => (
-                    <div key={i} className="rounded-full" style={{ width: `${w}%`, height: 2, background: "var(--gray-300)" }} />
-                  ))}
-                </div>
-                <div className="text-center">
-                  <div className="text-[13px] font-bold" style={{ color: "var(--gray-900)" }}>A4 Page</div>
-                  <div className="text-[11px] mt-0.5" style={{ color: "var(--gray-500)" }}>Full-page invoice</div>
-                </div>
-              </button>
-            </div>
-
-            <p className="text-center text-[11px] pb-4" style={{ color: "var(--gray-400)" }}>
-              Custom layouts coming soon — both options use the current design for now
-            </p>
-          </div>
-        </div>
-      )}
     </>
   );
 }
@@ -1920,7 +1676,7 @@ function WalkInInvoiceModal({
 }: {
   draft: WalkInDraft;
   setDraft: React.Dispatch<React.SetStateAction<WalkInDraft | null>>;
-  products: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null }[];
+  products: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }[];
   paymentMethods: { id: string; name: string }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
@@ -1952,10 +1708,11 @@ function WalkInInvoiceModal({
       const items = [...d.items];
       let item = { ...items[idx], [field]: value };
       if (field === "product") {
+        item.productId = null;
         const dbProd = products.find((p) => p.name === value);
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
-          item = { ...item, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
+          item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: isStandalone ? "standalone" : "sqft" };
           if (isStandalone) item = { ...item, width: 0, height: 0, sqft: 0 };
           if (!item.description.trim() && dbProd.description?.trim()) {
             item = { ...item, description: dbProd.description.trim() };
@@ -2104,13 +1861,14 @@ function WalkInInvoiceModal({
                     <SearchableSelect
                       value={item.product}
                       onChange={(v) => updateItem(idx, "product", v)}
-                      options={products.map((p) => ({ value: p.name, label: p.code ? `#${p.code} — ${p.name}` : p.name }))}
+                      options={products.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
                       placeholder="— Product —"
                       inputClassName={sm}
                       inputStyle={{ color: "#0C2433" }}
                       onCreate={(q) => onRequestCreateProduct(idx, q)}
                       createLabel="+ Add new product"
                     />
+                    <ProductExpiryNotice product={products.find(p => item.productId ? p.id === item.productId : p.name === item.product)} />
                     <textarea
                       value={item.description}
                       onChange={(e) => updateItem(idx, "description", e.target.value)}
@@ -2377,7 +2135,7 @@ function WalkInInvoiceModal({
               onClick={() => void onSave()}
               disabled={saving}
               className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white disabled:opacity-60"
-              style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+              style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
             >
               <FileText size={14} />
               {saving ? "Saving…" : draft.editingInvoiceId ? "Update invoice" : "Save invoice"}

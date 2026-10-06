@@ -1,6 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { ProductCategoryModal } from "@/components/ProductCategoryModal";
+import { ProductCategorySelect } from "@/components/ProductCategorySelect";
+import { ProductStockField } from "@/components/ProductStockField";
+import { ProductExpiryField } from "@/components/ProductExpiryField";
 import { db } from "@/lib/db";
 import { showToast } from "@/components/Toast";
 import { formatCurrency } from "@/lib/helpers";
@@ -9,7 +13,6 @@ import { DT } from "@/lib/dataTableStyles";
 import { useUser } from "@/lib/UserContext";
 import { useSaving } from "@/lib/useSaving";
 
-type PricingType = "sqft" | "standalone";
 
 interface Product {
   id: string;
@@ -18,7 +21,10 @@ interface Product {
   description?: string | null;
   cost_price: number;
   sale_price: number;
-  pricing_type?: PricingType | null;
+  quantity: number;
+  expiry_date?: string | null;
+  category_id?: string | null;
+  product_categories?: { id: string; name: string } | null;
   created_at: string;
 }
 
@@ -36,38 +42,64 @@ export default function ProductsPage() {
   const userProfile = useUser();
   const { saving, run } = useSaving();
   const [products, setProducts] = useState<Product[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [fName, setFName] = useState("");
   const [fCode, setFCode] = useState("");
+  const [fCategoryId, setFCategoryId] = useState("");
   const [fDescription, setFDescription] = useState("");
   const [fCost, setFCost] = useState("");
   const [fSale, setFSale] = useState("");
-  const [fPricingType, setFPricingType] = useState<PricingType>("sqft");
+  const [fQuantity, setFQuantity] = useState("0");
+  const [fNonExpiry, setFNonExpiry] = useState(true);
+  const [fExpiryDate, setFExpiryDate] = useState("");
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("*").order("name");
-    if (data) setProducts(data);
+    try {
+      const { data, error } = await db.from("products").select("*, product_categories(*)").order("name");
+      setLoadError(error?.message ?? "");
+      if (data) setProducts(data);
+    } catch {
+      setLoadError("Could not load products. Please try again.");
+    }
   }, []);
 
-  useEffect(() => { fetchProducts(); }, [fetchProducts]);
+  useEffect(() => {
+    let active = true;
+    void db.from("products").select("*, product_categories(*)").order("name").then(({ data, error }) => {
+      if (!active) return;
+      setLoadError(error?.message ?? "");
+      if (data) setProducts(data);
+    }).catch(() => {
+      if (active) setLoadError("Could not load products. Please try again.");
+    });
+    return () => { active = false; };
+  }, []);
 
   function openAdd() {
+    setFNonExpiry(true);
+    setFExpiryDate("");
+    setFQuantity("0");
     setEditingId(null);
+    setFCategoryId("");
     setFName(""); setFCode(""); setFDescription(""); setFCost(""); setFSale("");
-    setFPricingType("sqft");
     setShowModal(true);
   }
 
   function openEdit(p: Product) {
+    setFQuantity(String(p.quantity ?? 0));
+    setFNonExpiry(!p.expiry_date);
+    setFExpiryDate(p.expiry_date?.slice(0, 10) ?? "");
     setEditingId(p.id);
+    setFCategoryId(p.category_id ?? "");
     setFName(p.name);
     setFCode(p.code);
     setFDescription(p.description?.trim() ? p.description : "");
     setFCost(String(p.cost_price));
     setFSale(String(p.sale_price));
-    setFPricingType(p.pricing_type ?? "sqft");
     setShowModal(true);
   }
 
@@ -79,6 +111,12 @@ export default function ProductsPage() {
   }
 
   async function handleSave() {
+    if (!fNonExpiry && !fExpiryDate) { showToast("Enter the expiry date", "err"); return; }
+    const quantity = Number(fQuantity);
+    if (!fQuantity.trim() || !Number.isSafeInteger(quantity) || quantity < 0 || quantity > 2147483647) {
+      showToast("Enter a whole stock quantity of zero or more", "err"); return;
+    }
+    if (!fCategoryId) { showToast("Select a category", "err"); return; }
     if (!fName.trim()) { showToast("Enter product name", "err"); return; }
 
     const payload = {
@@ -87,7 +125,10 @@ export default function ProductsPage() {
       description: fDescription.trim(),
       cost_price: parseFloat(fCost) || 0,
       sale_price: parseFloat(fSale) || 0,
-      pricing_type: fPricingType,
+      pricing_type: "standalone",
+      category_id: fCategoryId,
+      ...(!editingId ? { quantity } : {}),
+      expiry_date: fNonExpiry ? null : fExpiryDate,
     };
 
     if (editingId) {
@@ -121,11 +162,18 @@ export default function ProductsPage() {
           <h1 className="text-xl font-extrabold" style={{ color: "var(--gray-900)" }}>Products</h1>
           <p className="text-xs mt-0.5" style={{ color: "var(--gray-800)" }}>Manage your product & pricing catalogue</p>
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={() => setShowCategoryModal(true)}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-[1.5px] text-[12.5px] font-semibold cursor-pointer bg-white hover:bg-[var(--blue-pale)]"
+          style={{ borderColor: "var(--gray-200)", color: "var(--blue-deeper)" }}>
+          <Plus size={14} /> Category
+        </button>
         <button onClick={openAdd}
           className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
-          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}>
+          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}>
           <Plus size={14} /> Add Product
         </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -137,7 +185,11 @@ export default function ProductsPage() {
           </span>
         </div>
 
-        {products.length === 0 ? (
+        {loadError ? (
+          <p role="alert" className="p-5 text-sm" style={{ color: "var(--red)" }}>
+            {loadError} <button type="button" className="underline cursor-pointer" onClick={() => void fetchProducts()}>Retry</button>
+          </p>
+        ) : products.length === 0 ? (
           <div className="py-14 text-center">
             <Package size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
             <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No products yet. Add your first product.</p>
@@ -147,7 +199,7 @@ export default function ProductsPage() {
             <table className={`${DT.table} min-w-[760px]`}>
               <thead>
                 <tr>
-                  {["Item Code", "Product Name", "Description", "Type", "Cost Price", "Sale Price", "Margin", ""].map((h) => (
+                  {["Item Code", "Product Name", "Description", "Category", "Quantity", "Cost Price", "Sale Price", "Margin", ""].map((h) => (
                     <th key={h} className={`${DT.th} text-left`} style={DT.thStyle}>
                       {h}
                     </th>
@@ -176,18 +228,13 @@ export default function ProductsPage() {
                           <span className="text-[12px]" style={{ color: "var(--gray-400)" }}>—</span>
                         )}
                       </td>
-                      <td className={DT.td}>
-                        {(p.pricing_type ?? "sqft") === "standalone" ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-bold" style={{ background: "var(--orange-light)", color: "#B45309" }}>Standalone</span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-bold" style={{ background: "var(--blue-light)", color: "var(--blue-deeper)" }}>Sqft (W×H)</span>
-                        )}
-                      </td>
+                      <td className={DT.td}><span className="text-[12px]" style={{ color: "var(--gray-800)" }}>{p.product_categories?.name ?? "Uncategorized"}</span></td>
+                      <td className={`${DT.td} ${DT.cellMono}`} style={{ color: p.quantity === 0 ? "var(--red)" : "var(--gray-900)" }}>{p.quantity ?? 0}</td>
                       <td className={`${DT.td} ${DT.cellMono}`} style={{ color: "var(--gray-900)" }}>
-                        {formatCurrency(p.cost_price)}{(p.pricing_type ?? "sqft") !== "standalone" && <span className="text-[10px] font-normal ml-0.5" style={{ color: "var(--gray-500)" }}>/sqft</span>}
+                        {formatCurrency(p.cost_price)}
                       </td>
                       <td className={`${DT.td} font-mono font-bold text-[15px]`} style={{ color: "var(--blue-deeper)" }}>
-                        {formatCurrency(p.sale_price)}{(p.pricing_type ?? "sqft") !== "standalone" && <span className="text-[10px] font-normal ml-0.5" style={{ color: "var(--gray-500)" }}>/sqft</span>}
+                        {formatCurrency(p.sale_price)}
                       </td>
                       <td className={DT.td}>
                         <span className={DT.badge}
@@ -219,6 +266,8 @@ export default function ProductsPage() {
           </div>
         )}
       </div>
+
+      {showCategoryModal && <ProductCategoryModal onClose={() => setShowCategoryModal(false)} onCreated={() => { void fetchProducts(); }} />}
 
       {/* Modal */}
       {showModal && (
@@ -261,21 +310,10 @@ export default function ProductsPage() {
               </div>
 
               {/* Pricing Type */}
-              <div className="flex flex-col gap-1 col-span-2">
-                <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Pricing Type</label>
-                <div className="flex border-[1.5px] rounded-[9px] overflow-hidden" style={{ borderColor: "var(--gray-200)" }}>
-                  <button type="button" onClick={() => setFPricingType("sqft")}
-                    className="flex-1 py-2 text-[12px] font-semibold border-none cursor-pointer transition-all"
-                    style={{ background: fPricingType === "sqft" ? "var(--blue-deeper)" : "var(--gray-50)", color: fPricingType === "sqft" ? "#fff" : "var(--gray-500)" }}>
-                    Sqft (Width × Height)
-                  </button>
-                  <button type="button" onClick={() => setFPricingType("standalone")}
-                    className="flex-1 py-2 text-[12px] font-semibold border-none cursor-pointer transition-all"
-                    style={{ background: fPricingType === "standalone" ? "#B45309" : "var(--gray-50)", color: fPricingType === "standalone" ? "#fff" : "var(--gray-500)" }}>
-                    Standalone (Fixed Price)
-                  </button>
-                </div>
-              </div>
+              <ProductCategorySelect value={fCategoryId} onChange={setFCategoryId} disabled={saving} />
+              <ProductStockField value={fQuantity} onChange={setFQuantity} disabled={saving} readOnly={!!editingId} />
+              <ProductExpiryField nonExpiry={fNonExpiry} date={fExpiryDate} onNonExpiryChange={setFNonExpiry} onDateChange={setFExpiryDate} disabled={saving} />
+              <div className="col-span-2 text-xs" style={{ color: "var(--gray-800)" }}>Standalone (fixed price per unit)</div>
 
               {/* Item Code */}
               <div className="flex flex-col gap-1">
@@ -289,7 +327,7 @@ export default function ProductsPage() {
               {/* Cost Price */}
               <div className="flex flex-col gap-1">
                 <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
-                  Cost Price{fPricingType === "sqft" ? " / Sqft" : ""} (Rs)
+                  Cost Price (Rs)
                 </label>
                 <input type="number" value={fCost} onChange={(e) => setFCost(e.target.value)}
                   placeholder="0" min="0"
@@ -299,7 +337,7 @@ export default function ProductsPage() {
               {/* Sale Price */}
               <div className="flex flex-col gap-1 col-span-2">
                 <label className="text-[10px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
-                  Sale Price{fPricingType === "sqft" ? " / Sqft" : ""} (Rs)
+                  Sale Price (Rs)
                 </label>
                 <input type="number" value={fSale} onChange={(e) => setFSale(e.target.value)}
                   placeholder="0" min="0"
@@ -312,7 +350,7 @@ export default function ProductsPage() {
                   style={{ background: "var(--green-light)", border: "1.5px solid rgba(14,173,106,.2)" }}>
                   <span className="text-[11px] font-semibold" style={{ color: "var(--green)" }}>
                     Margin: {Math.round(((parseFloat(fSale) - parseFloat(fCost)) / parseFloat(fSale)) * 100)}% —
-                    Rs {Math.round(parseFloat(fSale) - parseFloat(fCost))} profit {fPricingType === "sqft" ? "per sqft" : "per unit"}
+                    Rs {Math.round(parseFloat(fSale) - parseFloat(fCost))} profit per unit
                   </span>
                 </div>
               )}

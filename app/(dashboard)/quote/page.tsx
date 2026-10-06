@@ -593,7 +593,7 @@ export default function QuotePage() {
       ``,
       itemLines ? `*Items:*\n${itemLines}` : "",
       ``,
-      `— S.S.D`,
+      `— S.S. Diagnostics`,
     ]
       .filter((l) => l !== undefined)
       .join("\n");
@@ -643,7 +643,7 @@ export default function QuotePage() {
       }
       const safeDel = (delNo || quoteNumber).replace(/[^\w.-]+/g, "_");
       const safeParty = (partyName || "Client").slice(0, 40).replace(/[^\w\s.-]+/g, "").replace(/\s+/g, "_");
-      pdf.save(`Quotation_${safeDel}_${safeParty || "SkyDigital"}.pdf`);
+      pdf.save(`Quotation_${safeDel}_${safeParty || "SSDiagnostics"}.pdf`);
     } finally {
       node.style.display = prev.display;
       node.style.position = prev.position;
@@ -720,7 +720,7 @@ export default function QuotePage() {
                 className="text-left rounded-[16px] border-[1.5px] p-6 transition-all hover:shadow-[var(--shadow)] hover:-translate-y-0.5 cursor-pointer"
                 style={{ borderColor: "var(--gray-200)", background: "white", boxShadow: "var(--shadow-sm)" }}
               >
-                <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style={{ background: "var(--green-light)", color: "var(--green)" }}>
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-3" style={{ background: "var(--blue-light)", color: "var(--blue)" }}>
                   <FileStack size={26} />
                 </div>
                 <div className="text-[16px] font-extrabold" style={{ color: "var(--gray-900)" }}>
@@ -817,7 +817,7 @@ export default function QuotePage() {
                                 title="Send WhatsApp"
                                 onClick={() => void whatsappQuotation(q)}
                                 className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] border-[1.5px] cursor-pointer hover:bg-[var(--gray-50)]"
-                                style={{ borderColor: "var(--gray-200)", color: "#128C7E" }}
+                                style={{ borderColor: "var(--gray-200)", color: "#0277b5" }}
                               >
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
@@ -858,7 +858,7 @@ export default function QuotePage() {
                 onClick={() => void saveQuotation()}
                 disabled={saving}
                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-[10px] text-[13px] font-bold border-none cursor-pointer text-white disabled:opacity-50"
-                style={{ background: "linear-gradient(135deg, var(--green), #15803d)" }}
+                style={{ background: "linear-gradient(135deg, var(--blue), #0277b5)" }}
               >
                 {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
                 {editingQuoteId ? "Update save" : "Save quotation"}
@@ -1134,7 +1134,7 @@ export default function QuotePage() {
                   type="button"
                   onClick={() => setLineItems((prev) => [...prev, blankLine()])}
                   className="mt-3 text-[12px] font-bold px-3 py-2 rounded-[8px] border-none cursor-pointer"
-                  style={{ background: "var(--green-light)", color: "var(--green)" }}
+                  style={{ background: "var(--blue-light)", color: "var(--blue)" }}
                 >
                   + Add row
                 </button>
@@ -1220,7 +1220,7 @@ export default function QuotePage() {
         <PrintHeader />
 
         {/* Title bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", background: "#166534", color: "#fff", marginBottom: 10, paddingLeft: 8, paddingRight: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", background: "#0369a1", color: "#fff", marginBottom: 10, paddingLeft: 8, paddingRight: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Quotation</span>
           <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 12 }}>Quote # {quoteNumber}</span>
         </div>

@@ -9,7 +9,7 @@ import { UserContext } from "@/lib/UserContext";
 import { fetchUserProfile } from "@/lib/userProfile";
 import type { UserProfile } from "@/lib/userProfile";
 
-const SUB_USER_ALLOWED = ["/quick-invoice", "/accounts"];
+import { canAccessPath, firstAllowedPath } from "@/lib/moduleAccess";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [checking, setChecking] = useState(true);
@@ -19,23 +19,30 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    const refresh = async () => {
       try {
         const p = await fetchUserProfile();
         if (!cancelled) setProfile(p);
+        if (!cancelled && !p) router.replace("/");
       } finally {
         if (!cancelled) setChecking(false);
       }
-    })();
+    };
+    void refresh();
+    const onFocus = () => { void refresh(); };
+    window.addEventListener("focus", onFocus);
+    const timer = window.setInterval(onFocus, 60_000);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(timer);
     };
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (checking || !profile) return;
-    if (profile.role === "sub_user" && !SUB_USER_ALLOWED.includes(pathname)) {
-      router.replace("/quick-invoice");
+    if (!canAccessPath(profile, pathname)) {
+      router.replace(firstAllowedPath(profile));
     }
   }, [checking, profile, pathname, router]);
 
@@ -48,7 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   // Prevent flash of restricted content before redirect fires
-  if (profile?.role === "sub_user" && !SUB_USER_ALLOWED.includes(pathname)) {
+  if (profile && !canAccessPath(profile, pathname)) {
     return null;
   }
 

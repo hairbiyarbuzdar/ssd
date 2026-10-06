@@ -4,15 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, FolderOpen, Monitor, CreditCard,
-  FileText, Zap, LogOut, Package, BarChart2, Users, Hammer, Receipt,
+  FileText, Zap, LogOut, Package, BarChart2, Users, Receipt,
 } from "lucide-react";
 import { db } from "@/lib/db";
 import { useRouter } from "next/navigation";
 import { useUser } from "@/lib/UserContext";
 
-// Routes a sub_user is allowed to see/access. Must stay in sync with
-// SUB_USER_ALLOWED in app/(dashboard)/layout.tsx.
-const SUB_USER_HREFS = new Set(["/accounts", "/quick-invoice"]);
+import { canAccessPath } from "@/lib/moduleAccess";
 
 const navItems = [
   { label: "Overview", items: [
@@ -29,7 +27,6 @@ const navItems = [
   ]},
   { label: "Payroll", items: [
     { name: "Workers", href: "/workers", icon: Users },
-    { name: "Labor", href: "/labor", icon: Hammer },
   ]},
   { label: "Billing", items: [
     { name: "New Invoice", href: "/invoices", icon: FileText },
@@ -49,7 +46,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
 
   const visibleNav = isSubUser
     ? navItems
-        .map((s) => ({ ...s, items: s.items.filter((i) => SUB_USER_HREFS.has(i.href)) }))
+        .map((s) => ({ ...s, items: s.items.filter((i) => canAccessPath(profile, i.href)) }))
         .filter((s) => s.items.length > 0)
     : navItems;
 
@@ -100,7 +97,7 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
                   )}
                   <div className={`w-[30px] h-[30px] rounded-lg flex items-center justify-center shrink-0 transition-all`}
                     style={{
-                      background: isActive ? "rgba(21,128,61,.15)" : undefined,
+                      background: isActive ? "rgba(2,132,199,.15)" : undefined,
                     }}>
                     <Icon size={16} />
                   </div>

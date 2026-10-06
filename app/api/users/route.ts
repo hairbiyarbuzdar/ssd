@@ -3,6 +3,8 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
 
+import { validateModules, DEFAULT_MODULES } from "@/lib/moduleAccess";
+
 const MAX_SUB_USERS = 5;
 
 async function requireSuperAdmin(req: NextRequest) {
@@ -10,7 +12,9 @@ async function requireSuperAdmin(req: NextRequest) {
   if (!token) return { error: "Unauthorized", status: 401 as const };
   const payload = await verifyToken(token);
   if (!payload) return { error: "Unauthorized", status: 401 as const };
-  const role = payload.role ?? (payload.is_admin ? "super_admin" : "sub_user");
+  const currentUser = await prisma.user.findUnique({ where: { id: payload.sub } });
+  if (!currentUser?.is_active) return { error: "Unauthorized", status: 401 as const };
+  const role = currentUser.role;
   if (role !== "super_admin") return { error: "Forbidden", status: 403 as const };
   return { payload } as const;
 }
@@ -28,6 +32,7 @@ export async function GET(req: NextRequest) {
       email: true,
       full_name: true,
       is_active: true,
+      modules: true,
       created_at: true,
     },
     orderBy: { created_at: "asc" },
@@ -40,6 +45,7 @@ export async function GET(req: NextRequest) {
       email: u.email,
       full_name: u.full_name,
       is_active: u.is_active,
+      modules: u.modules,
       created_at: u.created_at.toISOString(),
     })),
   });
@@ -59,7 +65,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const body = (await req.json()) as { email?: string; password?: string; fullName?: string };
+  const body = (await req.json()) as { email?: string; password?: string; fullName?: string; modules?: unknown };
   const email = body.email?.trim().toLowerCase() ?? "";
   const password = body.password ?? "";
   const fullName = body.fullName?.trim() ?? "";
@@ -85,6 +91,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Email already in use" }, { status: 400 });
   }
 
+  let modules: string[];
+  try { modules = validateModules(body.modules === undefined ? DEFAULT_MODULES : body.modules); }
+  catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 400 }); }
+
   const hash = await bcrypt.hash(password, 12);
 
   await prisma.user.create({
@@ -93,6 +103,7 @@ export async function POST(req: NextRequest) {
       password_hash: hash,
       full_name: fullName,
       role: "sub_user",
+      modules,
       is_admin: false,
       is_active: true,
     },
@@ -109,7 +120,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  const body = (await req.json()) as { userId?: string; fullName?: string; password?: string };
+  const body = (await req.json()) as { userId?: string; fullName?: string; password?: string; modules?: unknown };
   const userId = body.userId?.trim() ?? "";
   const fullName = body.fullName !== undefined ? String(body.fullName).trim() : undefined;
   const password = body.password !== undefined ? String(body.password) : undefined;
@@ -117,8 +128,8 @@ export async function PATCH(req: NextRequest) {
   if (!userId) {
     return NextResponse.json({ error: "userId required" }, { status: 400 });
   }
-  if (fullName === undefined && password === undefined) {
-    return NextResponse.json({ error: "Provide fullName or password to update" }, { status: 400 });
+  if (fullName === undefined && password === undefined && body.modules === undefined) {
+    return NextResponse.json({ error: "Provide fullName, password or modules to update" }, { status: 400 });
   }
   if (fullName !== undefined && fullName.length === 0) {
     return NextResponse.json({ error: "Full name cannot be empty" }, { status: 400 });
@@ -138,7 +149,11 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
-  const data: { full_name?: string; password_hash?: string } = {};
+  const data: { full_name?: string; password_hash?: string; modules?: string[] } = {};
+  if (body.modules !== undefined) {
+    try { data.modules = validateModules(body.modules); }
+    catch (error) { return NextResponse.json({ error: (error as Error).message }, { status: 400 }); }
+  }
   if (fullName !== undefined) data.full_name = fullName;
   if (password !== undefined) data.password_hash = await bcrypt.hash(password, 12);
 

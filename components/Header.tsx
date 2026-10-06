@@ -49,7 +49,7 @@ export default function Header({ onMenuToggle }: { onMenuToggle: () => void }) {
         <img src="/brand/mark.svg" alt="" width={36} height={36} className="shrink-0" />
         <div className="flex flex-col">
           <div className="text-[13px] font-extrabold leading-tight tracking-wide" style={{ color: "var(--gray-900)" }}>
-            S.S.D
+            S.S. Diagnostics
           </div>
           <div className="text-[9px] font-semibold tracking-[1.5px] uppercase" style={{ color: "var(--gray-400)" }}>
             Business

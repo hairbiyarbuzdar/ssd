@@ -295,7 +295,7 @@ export default function PaymentMethodsPage() {
           </button>
           <button onClick={openAdd}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
-            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}>
+            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}>
             <Plus size={14} /> Add method
           </button>
         </div>
@@ -496,7 +496,7 @@ export default function PaymentMethodsPage() {
                     <div className="flex gap-1 shrink-0">
                       <button onClick={() => void handleRestore(m)} disabled={busyId === m.id}
                         className="w-8 h-8 rounded-[7px] border-[1.5px] flex items-center justify-center cursor-pointer bg-white disabled:opacity-50"
-                        style={{ borderColor: "var(--gray-200)", color: "var(--green)" }} title="Restore">
+                        style={{ borderColor: "var(--gray-200)", color: "var(--blue)" }} title="Restore">
                         <ArchiveRestore size={13} />
                       </button>
                       <button onClick={() => void handleDelete(m)} disabled={busyId === m.id}

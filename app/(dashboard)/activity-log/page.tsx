@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { formatCurrency } from "@/lib/helpers";
 import { DT } from "@/lib/dataTableStyles";
 import {
-  FileText, TrendingUp, TrendingDown, Briefcase,
+  FileText, TrendingUp, TrendingDown,
   Users, Truck, FileSignature, RefreshCw, Activity, Trash2,
 } from "lucide-react";
 
@@ -15,7 +15,6 @@ type EventType =
   | "invoice"
   | "payment_in"
   | "payment_out"
-  | "task"
   | "salary"
   | "purchase_order"
   | "quote"
@@ -37,9 +36,8 @@ interface ActivityEntry {
 
 const EVENT_COLORS: Record<EventType, { bg: string; color: string; border: string }> = {
   invoice:        { bg: "#EFF6FF", color: "#1D4ED8", border: "#BFDBFE" },
-  payment_in:     { bg: "#F0FDF4", color: "#15803D", border: "#BBF7D0" },
+  payment_in:     { bg: "#F0F9FF", color: "#15803D", border: "#BBF7D0" },
   payment_out:    { bg: "#FEF2F2", color: "#B91C1C", border: "#FECACA" },
-  task:           { bg: "#FFF7ED", color: "#C2410C", border: "#FED7AA" },
   salary:         { bg: "#F5F3FF", color: "#7C3AED", border: "#DDD6FE" },
   purchase_order: { bg: "#F8FAFC", color: "#475569", border: "#E2E8F0" },
   quote:          { bg: "#FEFCE8", color: "#A16207", border: "#FEF08A" },
@@ -50,7 +48,6 @@ const EVENT_ICONS: Record<EventType, React.ElementType> = {
   invoice:        FileText,
   payment_in:     TrendingUp,
   payment_out:    TrendingDown,
-  task:           Briefcase,
   salary:         Users,
   purchase_order: Truck,
   quote:          FileSignature,
@@ -61,7 +58,6 @@ const EVENT_LABELS: Record<EventType, string> = {
   invoice:        "Invoice",
   payment_in:     "Payment In",
   payment_out:    "Payment Out",
-  task:           "Task",
   salary:         "Salary",
   purchase_order: "Purchase Order",
   quote:          "Quotation",
@@ -81,7 +77,7 @@ function periodStart(period: string): string {
 }
 
 const BADGE_COLORS: Record<string, { bg: string; color: string }> = {
-  paid:    { bg: "#F0FDF4", color: "#15803D" },
+  paid:    { bg: "#F0F9FF", color: "#15803D" },
   partial: { bg: "#FFFBEB", color: "#D97706" },
   unpaid:  { bg: "#FEF2F2", color: "#B91C1C" },
   pending: { bg: "#FFFBEB", color: "#D97706" },
@@ -136,7 +132,6 @@ export default function ActivityLogPage() {
     const [
       { data: invoices },
       { data: cashbook },
-      { data: tasks },
       { data: workerPays },
       { data: pos },
       { data: quotes },
@@ -154,13 +149,7 @@ export default function ActivityLogPage() {
         .order("created_at", { ascending: false })
         .limit(500)),
 
-      dated(db
-        .from("labor_tasks")
-        .select("id, task_name, amount, status, created_by_email, created_by_name, created_at, laborers(name)")
-        .order("created_at", { ascending: false })
-        .limit(500)),
-
-      dated(db
+dated(db
         .from("worker_payments")
         .select("id, month, net_paid, created_by_email, created_by_name, created_at, workers(name)")
         .order("created_at", { ascending: false })
@@ -217,23 +206,6 @@ export default function ActivityLogPage() {
       });
     }
 
-    // Labor tasks
-    for (const t of tasks ?? []) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lab = (t as any).laborers as { name?: string } | null;
-      all.push({
-        id: `task-${t.id}`,
-        eventType: "task",
-        title: t.status === "paid" ? "Task Completed" : "Task Assigned",
-        subtitle: `${t.task_name}${lab?.name ? ` — ${lab.name}` : ""}`,
-        amount: t.amount,
-        timestamp: t.created_at,
-        badge: t.status,
-        userEmail: t.created_by_email,
-        userName: t.created_by_name,
-      });
-    }
-
     // Worker salary payments
     for (const wp of workerPays ?? []) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -287,7 +259,7 @@ export default function ActivityLogPage() {
       const action = String(r.action ?? "");
       // For now we only render deletion rows here — the other rows are
       // already represented by the create-time queries above.
-      if (action !== "delete") continue;
+      if (action !== "delete" || ["laborer", "labor_task", "labor_advance"].includes(r.entity_type)) continue;
       all.push({
         id: `log-${r.id}`,
         eventType: "deletion",
@@ -319,7 +291,6 @@ export default function ActivityLogPage() {
   const totalInvoiced   = filtered.filter(e => e.eventType === "invoice").reduce((s, e) => s + (e.amount ?? 0), 0);
   const totalIn         = filtered.filter(e => e.eventType === "payment_in").reduce((s, e) => s + (e.amount ?? 0), 0);
   const totalOut        = filtered.filter(e => e.eventType === "payment_out").reduce((s, e) => s + (e.amount ?? 0), 0);
-  const countTasks      = filtered.filter(e => e.eventType === "task").length;
   const countDeletions  = filtered.filter(e => e.eventType === "deletion").length;
 
   const stats = [
@@ -329,7 +300,6 @@ export default function ActivityLogPage() {
     { label: "Cash Out",       value: formatCurrency(totalOut),    color: "#B91C1C" },
     { label: "Deletions",      value: String(countDeletions),      color: "#991B1B" },
   ];
-  void countTasks;
 
   const colSpan = 6;
 
@@ -352,7 +322,7 @@ export default function ActivityLogPage() {
               </h1>
             </div>
             <p className="text-[13px] mt-1 ml-0.5" style={{ color: "var(--gray-600)" }}>
-              All application activity — invoices, payments, tasks, salaries, and more
+              All application activity — invoices, payments, salaries, and more
             </p>
           </div>
           <button

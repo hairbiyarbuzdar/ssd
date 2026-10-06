@@ -78,12 +78,12 @@ export default function LoginPage() {
       >
         <div
           className="relative text-center overflow-hidden"
-          style={{ background: "var(--accent-green)", padding: "36px 40px 44px" }}
+          style={{ background: "var(--accent-sky)", padding: "36px 40px 44px" }}
         >
           <div className="flex items-center justify-center mb-2">
             <img
               src="/brand/logo.svg"
-              alt="S.S.D"
+              alt="S.S. Diagnostics"
               className="w-full max-w-[300px] h-auto object-contain"
             />
           </div>
@@ -129,7 +129,7 @@ export default function LoginPage() {
                 onFocus={(e) => {
                   e.target.style.borderColor = "var(--blue)";
                   e.target.style.background = "#fff";
-                  e.target.style.boxShadow = "0 0 0 3px rgba(21,128,61,.1)";
+                  e.target.style.boxShadow = "0 0 0 3px rgba(2,132,199,.1)";
                 }}
                 onBlur={(e) => {
                   e.target.style.borderColor = "var(--gray-200)";
@@ -157,7 +157,7 @@ export default function LoginPage() {
                 onFocus={(e) => {
                   e.target.style.borderColor = "var(--blue)";
                   e.target.style.background = "#fff";
-                  e.target.style.boxShadow = "0 0 0 3px rgba(21,128,61,.1)";
+                  e.target.style.boxShadow = "0 0 0 3px rgba(2,132,199,.1)";
                 }}
                 onBlur={(e) => {
                   e.target.style.borderColor = "var(--gray-200)";
@@ -187,17 +187,17 @@ export default function LoginPage() {
               className="w-full py-3 mt-2 rounded-[9px] border-none text-[13px] font-bold tracking-[1px] text-white cursor-pointer transition-all flex items-center justify-center gap-2 disabled:opacity-60"
               style={{
                 background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))",
-                boxShadow: "0 4px 18px rgba(21,128,61,.35)",
+                boxShadow: "0 4px 18px rgba(2,132,199,.35)",
               }}
               onMouseEnter={(e) => {
                 if (!loading) {
                   e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 8px 24px rgba(21,128,61,.45)";
+                  e.currentTarget.style.boxShadow = "0 8px 24px rgba(2,132,199,.45)";
                 }
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.transform = "translateY(0)";
-                e.currentTarget.style.boxShadow = "0 4px 18px rgba(21,128,61,.35)";
+                e.currentTarget.style.boxShadow = "0 4px 18px rgba(2,132,199,.35)";
               }}
             >
               {loading ? (

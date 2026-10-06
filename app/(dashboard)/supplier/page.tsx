@@ -15,7 +15,6 @@ import {
   Truck,
   Wallet,
   FileText,
-  Package,
   BookOpen,
 } from "lucide-react";
 import { DT } from "@/lib/dataTableStyles";
@@ -30,9 +29,8 @@ import { type LedgerRow, ledgerRowsForDateRange, openingBalanceBeforeDate } from
 import { useUser } from "@/lib/UserContext";
 import { confirmDialog } from "@/components/ConfirmModal";
 import { logActivity } from "@/lib/activityLog";
-import { SearchableSelect } from "@/components/SearchableSelect";
-import { PurchaseProductCreateModal, type CreatedPurchaseProduct } from "@/components/PurchaseProductCreateModal";
 import { buildSupplierPaymentWhatsAppMessage, openWhatsAppNewTab } from "@/lib/whatsappWaMe";
+import { SearchableSelect } from "@/components/SearchableSelect";
 import { PrintHeader } from "@/components/PrintHeader";
 import { PrintFooter } from "@/components/PrintFooter";
 
@@ -50,8 +48,8 @@ interface PoLine {
   description: string;
   qty: number;
   rate: number;
-  gram: number | null;
-  meter: number | null;
+  productId: string | null;
+  expiryDate: string | null;
   amount: number;
 }
 
@@ -79,7 +77,7 @@ interface SavedPO {
 }
 
 function blankLine(): PoLine {
-  return { description: "", qty: 1, rate: 0, amount: 0, gram: null, meter: null };
+  return { description: "", qty: 1, rate: 0, amount: 0, productId: null, expiryDate: null };
 }
 
 function calcLine(line: PoLine): PoLine {
@@ -163,7 +161,7 @@ function buildSupplierLedgerRows(
       date,
       sortAt: `${date}T${po.created_at || "1970-01-01"}_po`,
       doc: po.po_number,
-      desc: "Purchase order",
+      desc: "Purchase invoice",
       debit: Number(po.grand_total) || 0,
       credit: 0,
       method: po.payment_method || "—",
@@ -238,16 +236,6 @@ export default function SupplierPage() {
   const [ledgerDownloading, setLedgerDownloading] = useState(false);
   const ledgerPdfRef = useRef<HTMLDivElement | null>(null);
 
-  const [supplierProds, setSupplierProds] = useState<{ id: string; code: string | null; name: string; gram: number | null; meter: number | null }[]>([]);
-  const [supplierProdsLoading, setSupplierProdsLoading] = useState(false);
-  const [newProdName, setNewProdName] = useState("");
-  const [newProdGram, setNewProdGram] = useState("");
-  const [newProdMeter, setNewProdMeter] = useState("");
-  const [addingProd, setAddingProd] = useState(false);
-
-  // Universal purchase products modal
-  const [showPurchaseProdsModal, setShowPurchaseProdsModal] = useState(false);
-
   const pdfRef = useRef<HTMLDivElement>(null);
   const [pdfData, setPdfData] = useState<PurchaseOrderPdfPayload | null>(null);
   const [generatingPdfFor, setGeneratingPdfFor] = useState<string | null>(null);
@@ -293,25 +281,6 @@ export default function SupplierPage() {
     void fetchSuppliers();
     void fetchPOs();
   }, [fetchSuppliers, fetchPOs]);
-
-  useEffect(() => {
-    if (!showPurchaseProdsModal) {
-      setSupplierProds([]);
-      setNewProdName("");
-      setNewProdGram("");
-      setNewProdMeter("");
-      return;
-    }
-    setSupplierProdsLoading(true);
-    db
-      .from("purchase_products")
-      .select("id, code, name, gram, meter")
-      .order("code")
-      .then(({ data }) => {
-        setSupplierProds((data ?? []) as { id: string; code: string | null; name: string; gram: number | null; meter: number | null }[]);
-        setSupplierProdsLoading(false);
-      });
-  }, [showPurchaseProdsModal]);
 
   const scheduleAfterPrint = useCallback((cleanup: () => void) => {
     let ran = false;
@@ -389,7 +358,7 @@ export default function SupplierPage() {
       return;
     }
     if ((count ?? 0) > 0) {
-      showToast("Cannot delete: this supplier has purchase orders", "err");
+      showToast("Cannot delete: this supplier has purchase invoices", "err");
       return;
     }
     const ok = await confirmDialog({
@@ -418,37 +387,6 @@ export default function SupplierPage() {
     } finally {
       setDeletingSupplierId(null);
     }
-  }
-
-  async function addSupplierProduct() {
-    if (!newProdName.trim()) return;
-    setAddingProd(true);
-    const gram = parseFloat(newProdGram) || null;
-    const meter = parseFloat(newProdMeter) || null;
-    // CR-16 — sequential numeric code so it's easy to type when picking on a PO line.
-    let max = 0;
-    for (const p of supplierProds) {
-      const m = String(p.code ?? "").match(/(\d+)/);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
-    }
-    const code = String(max + 1).padStart(3, "0");
-    const { data, error } = await db
-      .from("purchase_products")
-      .insert({ name: newProdName.trim(), gram, meter, code })
-      .select()
-      .single();
-    setAddingProd(false);
-    if (error) { showToast(error.message, "err"); return; }
-    setSupplierProds((prev) => [...prev, data as { id: string; code: string | null; name: string; gram: number | null; meter: number | null }].sort((a, b) => (a.code ?? "").localeCompare(b.code ?? "")));
-    setNewProdName("");
-    setNewProdGram("");
-    setNewProdMeter("");
-  }
-
-  async function removeSupplierProduct(id: string) {
-    const { error } = await db.from("purchase_products").delete().eq("id", id);
-    if (error) { showToast(error.message, "err"); return; }
-    setSupplierProds((prev) => prev.filter((p) => p.id !== id));
   }
 
   function openPoModal() {
@@ -488,7 +426,7 @@ export default function SupplierPage() {
     if (poErr || !poRow) { showToast(poErr?.message || "Could not load PO", "err"); return; }
     const { data: itemRows, error: itemErr } = await db
       .from("purchase_order_items")
-      .select("description, qty, rate, amount")
+      .select("description, product_id, expiry_date, qty, rate, amount")
       .eq("purchase_order_id", po.id)
       .order("id", { ascending: true });
     if (itemErr) { showToast(itemErr.message, "err"); return; }
@@ -497,8 +435,8 @@ export default function SupplierPage() {
       qty: Number(it.qty),
       rate: Number(it.rate),
       amount: Number(it.amount),
-      gram: null,
-      meter: null,
+      productId: it.product_id ? String(it.product_id) : null,
+      expiryDate: it.expiry_date ? String(it.expiry_date).slice(0, 10) : null,
     }));
     setEditPoId(po.id);
     setPoDraft({
@@ -853,7 +791,7 @@ export default function SupplierPage() {
       },
       items: items.map((it) => ({
         description: it.description,
-        unit: "qty",
+        expiry_date: it.expiryDate,
         qty: it.qty,
         rate: it.rate,
         amount: it.amount,
@@ -864,12 +802,12 @@ export default function SupplierPage() {
   async function fetchPoPdfPayload(poId: string): Promise<PurchaseOrderPdfPayload | null> {
     const { data: po, error: poErr } = await db.from("purchase_orders").select("*").eq("id", poId).single();
     if (poErr || !po) {
-      showToast(poErr?.message || "Purchase order not found", "err");
+      showToast(poErr?.message || "Purchase invoice not found", "err");
       return null;
     }
     const { data: rows, error: itemErr } = await db
       .from("purchase_order_items")
-      .select("description, unit, qty, rate, amount")
+      .select("description, expiry_date, unit, qty, rate, amount")
       .eq("purchase_order_id", poId)
       .order("id", { ascending: true });
     if (itemErr) {
@@ -891,7 +829,7 @@ export default function SupplierPage() {
       },
       items: ((rows ?? []) as Record<string, unknown>[]).map((it) => ({
         description: String(it.description ?? ""),
-        unit: "sqft",
+        expiry_date: it.expiry_date ? String(it.expiry_date).slice(0, 10) : null,
         qty: Number(it.qty),
         rate: Number(it.rate),
         amount: Number(it.amount),
@@ -968,6 +906,8 @@ export default function SupplierPage() {
         items.map((it) => ({
           purchase_order_id: editPoId,
           description: it.description.trim() || "Item",
+          product_id: it.productId,
+          expiry_date: it.expiryDate,
           unit: "qty",
           qty: it.qty,
           rate: it.rate,
@@ -975,7 +915,7 @@ export default function SupplierPage() {
         }))
       );
       if (itemErr) { showToast(itemErr.message, "err"); return; }
-      showToast(`Purchase order ${poDraft.poNumber} updated`, "ok");
+      showToast(`Purchase invoice ${poDraft.poNumber} updated`, "ok");
       setPoDraft(null);
       setEditPoId(null);
       void fetchPOs();
@@ -1037,7 +977,7 @@ export default function SupplierPage() {
         .single();
 
       if (poErr || !poRow) {
-        showToast(poErr?.message || "Could not save purchase order", "err");
+        showToast(poErr?.message || "Could not save purchase invoice", "err");
         return;
       }
       const assignedPoNumber = String((poRow as { po_number: string }).po_number);
@@ -1046,6 +986,8 @@ export default function SupplierPage() {
         items.map((it) => ({
           purchase_order_id: poRow.id,
           description: it.description.trim() || "Item",
+          product_id: it.productId,
+          expiry_date: it.expiryDate,
           unit: "qty",
           qty: it.qty,
           rate: it.rate,
@@ -1062,7 +1004,7 @@ export default function SupplierPage() {
           .from("cashbook")
           .insert({
             type: "out",
-            description: `Purchase order ${assignedPoNumber} — ${sup.name}`,
+            description: `Purchase invoice ${assignedPoNumber} — ${sup.name}`,
             amount: amountPaid,
             date: poDraft.orderDate,
             method: poDraft.payMethod,
@@ -1089,7 +1031,7 @@ export default function SupplierPage() {
         }
       }
 
-      showToast(`Purchase order ${assignedPoNumber} saved`, "ok");
+      showToast(`Purchase invoice ${assignedPoNumber} saved`, "ok");
       setPoDraft(null);
       void fetchPOs();
     } finally {
@@ -1248,7 +1190,7 @@ export default function SupplierPage() {
     { label: "Address", align: "left" },
     { label: "Ledger", title: "View full transaction ledger and download/print report", align: "center" },
     { label: "Pay supplier", title: "Cash out — reduce opening balance then oldest POs first", align: "center" },
-    { label: "New invoice", title: "Create supplier invoice (PO) with this supplier selected", align: "center" },
+    { label: "New invoice", title: "Create purchase invoice with this supplier selected", align: "center" },
     { label: "Actions", title: "Edit or delete supplier", align: "center" },
   ];
 
@@ -1268,19 +1210,12 @@ export default function SupplierPage() {
                 Supplier billing
               </h1>
               <p className="text-xs mt-0.5" style={{ color: "var(--gray-700)" }}>
-                Supplier invoices (PO-based) post to Cash Book as <b>money out</b> (reduces cash in hand). Set supplier opening payables below; they are not cash until you pay.
+                Payments for purchase invoices post to Cash Book as <b>money out</b> (reduces cash in hand). Set supplier opening payables below; they are not cash until you pay.
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setShowPurchaseProdsModal(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-[1.5px] text-[12.5px] font-semibold cursor-pointer"
-              style={{ borderColor: "var(--purple)", background: "white", color: "var(--purple)" }}
-            >
-              <Package size={14} /> Supplier Products
-            </button>
+
             <button
               type="button"
               onClick={openNewSupplier}
@@ -1295,10 +1230,10 @@ export default function SupplierPage() {
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
               style={{
                 background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))",
-                boxShadow: "0 2px 10px rgba(21,128,61,.28)",
+                boxShadow: "0 2px 10px rgba(2,132,199,.28)",
               }}
             >
-              <Plus size={14} /> New supplier invoice
+              <Plus size={14} /> New purchase invoice
             </button>
           </div>
         </div>
@@ -1367,8 +1302,8 @@ export default function SupplierPage() {
                           <button
                             type="button"
                             onClick={() => void openPaySupplierModal(s)}
-                            className="inline-flex items-center justify-center gap-1.5 w-full max-w-[140px] mx-auto px-3 py-2 rounded-[9px] border-[1.5px] cursor-pointer hover:bg-[var(--green-light)] text-[11px] font-bold"
-                            style={{ borderColor: "var(--green)", color: "var(--green)" }}
+                            className="inline-flex items-center justify-center gap-1.5 w-full max-w-[140px] mx-auto px-3 py-2 rounded-[9px] border-[1.5px] cursor-pointer hover:bg-[var(--blue-light)] text-[11px] font-bold"
+                            style={{ borderColor: "var(--blue)", color: "var(--blue)" }}
                             title="Pay supplier — cash out, reduce opening balance then oldest POs first"
                           >
                             <Wallet size={14} /> Pay
@@ -1380,7 +1315,7 @@ export default function SupplierPage() {
                             onClick={() => openPoModalForSupplier(s)}
                             className="inline-flex items-center justify-center gap-1.5 w-full max-w-[140px] mx-auto px-3 py-2 rounded-[9px] border-[1.5px] cursor-pointer hover:bg-[var(--blue-pale)] text-[11px] font-bold"
                             style={{ borderColor: "var(--blue-deeper)", color: "var(--blue-deeper)" }}
-                            title="New supplier invoice for this supplier (PO flow)"
+                            title="New purchase invoice for this supplier"
                           >
                             <FileText size={14} /> New invoice
                           </button>
@@ -1423,7 +1358,7 @@ export default function SupplierPage() {
         <section>
           <div className="flex items-center gap-2.5 mb-3">
             <span className="text-[10px] font-bold tracking-[2px] uppercase" style={{ color: "var(--gray-700)" }}>
-              Supplier invoices (PO)
+              Purchase invoices
             </span>
             <div className="flex-1 h-px" style={{ background: "var(--gray-200)" }} />
             <span className="text-[11px] font-semibold" style={{ color: "var(--gray-700)" }}>{savedPOs.length}</span>
@@ -1448,7 +1383,7 @@ export default function SupplierPage() {
                   {savedPOs.length === 0 ? (
                     <tr>
                       <td colSpan={7} className={DT.empty} style={DT.emptyStyle}>
-                        No supplier invoices yet
+                        No purchase invoices yet
                       </td>
                     </tr>
                   ) : (
@@ -1483,7 +1418,7 @@ export default function SupplierPage() {
                                 type="button"
                                 onClick={() => void openEditPo(po)}
                                 disabled={generatingPdfFor !== null || printingPdfFor !== null || draftPdfBusy}
-                                title="Edit purchase order"
+                                title="Edit purchase invoice"
                                 className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] border-[1.5px] cursor-pointer hover:bg-[var(--blue-pale)] disabled:opacity-45"
                                 style={{ borderColor: "var(--gray-200)", color: "var(--blue-deeper)" }}
                               >
@@ -1507,7 +1442,7 @@ export default function SupplierPage() {
                                 disabled={generatingPdfFor !== null || printingPdfFor !== null || draftPdfBusy}
                                 title="Send WhatsApp update"
                                 className="inline-flex items-center justify-center w-8 h-8 rounded-[8px] border-[1.5px] cursor-pointer hover:bg-[var(--gray-50)] disabled:opacity-45"
-                                style={{ borderColor: "var(--gray-200)", color: "#128C7E" }}
+                                style={{ borderColor: "var(--gray-200)", color: "#0277b5" }}
                               >
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.435 9.884-9.885 9.884" />
@@ -1598,13 +1533,13 @@ export default function SupplierPage() {
                     </span>
                   </div>
                   <p className="text-[9px] font-medium m-0 leading-snug" style={{ color: "var(--gray-600)" }}>
-                    Payment applies to <b>opening balance</b> first, then <b>purchase orders</b> by date (oldest first). Posts to Cash Book as money out.
+                    Payment applies to <b>opening balance</b> first, then <b>purchase invoices</b> by date (oldest first). Posts to Cash Book as money out.
                   </p>
                 </div>
 
                 {payModalOutstanding <= 0 ? (
                   <p className="px-5 py-6 text-[13px] m-0" style={{ color: "var(--gray-600)" }}>
-                    Nothing owed to this supplier. Use <b>New supplier invoice</b> to record new purchases.
+                    Nothing owed to this supplier. Use <b>New purchase invoice</b> to record new purchases.
                   </p>
                 ) : (
                   <div className="px-5 py-3 max-h-[160px] overflow-y-auto border-b border-[var(--gray-100)]">
@@ -1710,7 +1645,7 @@ export default function SupplierPage() {
                     onClick={() => void handlePaySupplier()}
                     disabled={spSaving || paySupplierLoading || payModalOutstanding <= 0}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-50"
-                    style={{ background: "var(--green)", boxShadow: "0 2px 10px rgba(14,173,106,.25)" }}
+                    style={{ background: "var(--blue)", boxShadow: "0 2px 10px rgba(14,173,106,.25)" }}
                   >
                     <Wallet size={14} />
                     {spSaving ? "Saving…" : "Record payment"}
@@ -1796,7 +1731,7 @@ export default function SupplierPage() {
                   placeholder="0"
                 />
                 <span className="block mt-1 text-[10px] font-normal normal-case" style={{ color: "var(--gray-600)" }}>
-                  What you already owed this supplier before purchase orders here. Does not change cash until you pay (e.g. via PO "Paid now" or Cash Book).
+                  What you already owed this supplier before purchase invoices here. Does not change cash until you pay (e.g. via Paid now on a purchase invoice or Cash Book).
                 </span>
               </label>
 
@@ -1818,125 +1753,6 @@ export default function SupplierPage() {
               >
                 {supplierSaving ? <Loader2 size={14} className="animate-spin inline" /> : "Save"}
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Universal Supplier Products Modal */}
-      {showPurchaseProdsModal && (
-        <div className="fixed inset-0 z-[900] flex items-start justify-center backdrop-blur-sm pt-8 px-3 pb-8 overflow-y-auto no-print">
-          <button type="button" aria-label="Close" className="absolute inset-0 bg-black/35 border-none cursor-default" onClick={() => setShowPurchaseProdsModal(false)} />
-          <div className="relative w-full max-w-lg rounded-2xl overflow-hidden shadow-2xl" style={{ background: "white", zIndex: 1 }}>
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4" style={{ background: "var(--purple)", color: "white" }}>
-              <div className="flex items-center gap-2">
-                <Package size={18} />
-                <div>
-                  <span className="text-[15px] font-bold">Supplier Products</span>
-                  <p className="text-[10px] text-white/75 mt-0.5">Universal catalog — available for all suppliers when creating a purchase order</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPurchaseProdsModal(false)}
-                className="w-8 h-8 rounded-full flex items-center justify-center border-none cursor-pointer hover:bg-white/15"
-                style={{ color: "white" }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              {/* Add product form */}
-              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2">
-                <input
-                  className="border border-[var(--gray-200)] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[var(--purple)]"
-                  placeholder="Product name"
-                  value={newProdName}
-                  onChange={(e) => setNewProdName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void addSupplierProduct(); }}
-                />
-                <input
-                  type="number"
-                  className="w-20 border border-[var(--gray-200)] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[var(--purple)]"
-                  placeholder="Gram"
-                  value={newProdGram}
-                  onChange={(e) => setNewProdGram(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void addSupplierProduct(); }}
-                />
-                <input
-                  type="number"
-                  className="w-20 border border-[var(--gray-200)] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[var(--purple)]"
-                  placeholder="MM"
-                  value={newProdMeter}
-                  onChange={(e) => setNewProdMeter(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void addSupplierProduct(); }}
-                />
-                <button
-                  type="button"
-                  onClick={() => void addSupplierProduct()}
-                  disabled={addingProd || !newProdName.trim()}
-                  className="px-4 py-2 rounded-lg border-none text-[12px] font-semibold cursor-pointer text-white disabled:opacity-50 flex items-center gap-1"
-                  style={{ background: "var(--purple)" }}
-                >
-                  {addingProd ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                  Add
-                </button>
-              </div>
-
-              {/* Products list */}
-              {supplierProdsLoading ? (
-                <div className="flex justify-center py-6"><Loader2 size={20} className="animate-spin" style={{ color: "var(--purple)" }} /></div>
-              ) : supplierProds.length === 0 ? (
-                <p className="text-center text-[13px] py-6" style={{ color: "var(--gray-500)" }}>No products yet. Add one above.</p>
-              ) : (
-                <div className="border border-[var(--gray-100)] rounded-xl overflow-hidden">
-                  <table className="w-full text-[13px]">
-                    <thead>
-                      <tr style={{ background: "var(--gray-50)" }}>
-                        <th className="text-left px-3 py-2 font-bold text-[10px] uppercase tracking-wide" style={{ color: "var(--gray-600)" }}>Product</th>
-                        <th className="text-center px-3 py-2 font-bold text-[10px] uppercase tracking-wide" style={{ color: "var(--gray-600)" }}>Gram</th>
-                        <th className="text-center px-3 py-2 font-bold text-[10px] uppercase tracking-wide" style={{ color: "var(--gray-600)" }}>MM</th>
-                        <th className="w-10" />
-                      </tr>
-                    </thead>
-                  </table>
-                  <div style={{ maxHeight: "calc(10 * 41px)", overflowY: "auto" }}>
-                    <table className="w-full text-[13px]">
-                      <tbody>
-                        {supplierProds.map((p) => (
-                          <tr key={p.id} className="border-t border-[var(--gray-100)]">
-                            <td className="px-3 py-2 font-medium">
-                              {p.code && (
-                                <span className="font-mono text-[11px] font-bold px-1.5 py-0.5 rounded mr-2" style={{ background: "var(--blue-light)", color: "var(--blue-deeper)" }}>
-                                  {p.code}
-                                </span>
-                              )}
-                              {p.name}
-                            </td>
-                            <td className="px-3 py-2 text-center font-mono text-[12px]" style={{ color: "var(--gray-600)" }}>
-                              {p.gram != null ? `${p.gram}g` : "—"}
-                            </td>
-                            <td className="px-3 py-2 text-center font-mono text-[12px]" style={{ color: "var(--gray-600)" }}>
-                              {p.meter != null ? `${p.meter}mm` : "—"}
-                            </td>
-                            <td className="px-2 py-2 text-center">
-                              <button
-                                type="button"
-                                onClick={() => void removeSupplierProduct(p.id)}
-                                className="p-1 rounded-md text-[var(--red)] hover:bg-[var(--red-light)]"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1982,7 +1798,7 @@ export default function SupplierPage() {
             <div className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--gray-100)]"
               style={{ background: "var(--gray-50)" }}>
               <p className="text-[11px] font-semibold m-0" style={{ color: "var(--gray-800)" }}>
-                Opening balance, purchase orders and cashbook lines for this supplier
+                Opening balance, purchase invoices and cashbook lines for this supplier
               </p>
               <div className="flex flex-wrap gap-2">
                 <button type="button" onClick={() => void downloadLedgerPdf()}
@@ -2121,7 +1937,7 @@ export default function SupplierPage() {
           <PrintHeader />
 
           {/* Title bar — matches A4 invoice */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#14532d", color: "#fff", marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 12px", background: "#075985", color: "#fff", marginBottom: 10 }}>
             <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Supplier Ledger</span>
             <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13 }}>
               {(ledgerDateFrom.trim() || ledgerDateTo.trim())
@@ -2149,7 +1965,7 @@ export default function SupplierPage() {
                 <span style={{ fontWeight: 700, fontSize: 12 }}>{formatDate(todayISO())}</span>
               </div>
               <div style={{ marginTop: 4, textAlign: "right" }}>
-                <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S.D</div>
+                <div style={{ fontWeight: 700, fontSize: 10, color: "#111" }}>S.S. Diagnostics</div>
               </div>
             </div>
           </div>
@@ -2167,7 +1983,7 @@ export default function SupplierPage() {
             const cellPad = "6px 8px";
             return (
               <div style={{ padding: "0 12px", marginBottom: 12, flex: 1, display: "flex", flexDirection: "column", minHeight: 0, fontSize: 13 }}>
-                <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#14532d", color: "#fff" }}>
+                <div style={{ display: "grid", gridTemplateColumns: gridCols, background: "#075985", color: "#fff" }}>
                   {[
                     { label: "Date", align: "left" as const },
                     { label: "Doc / Ref", align: "left" as const },
@@ -2201,7 +2017,7 @@ export default function SupplierPage() {
                     style={{ display: "grid", gridTemplateColumns: gridCols, background: idx % 2 === 0 ? "#fff" : "#f8fafc", borderBottom: "1px solid #000" }}
                   >
                     <div style={{ padding: cellPad, color: "#111", borderLeft: "1px solid #000" }}>{formatDate(r.date)}</div>
-                    <div style={{ padding: cellPad, fontWeight: 800, color: "#14532d", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{r.doc}</div>
+                    <div style={{ padding: cellPad, fontWeight: 800, color: "#075985", fontFamily: "monospace", borderLeft: "1px solid #000" }}>{r.doc}</div>
                     <div style={{ padding: cellPad, color: "#111", borderLeft: "1px solid #000" }}>{r.desc}</div>
                     <div style={{ padding: cellPad, textAlign: "right", fontFamily: "monospace", fontWeight: 700, color: r.debit > 0 ? "#111" : "#ccc", borderLeft: "1px solid #000" }}>
                       {r.debit > 0 ? formatCurrency(r.debit) : "—"}
@@ -2283,22 +2099,6 @@ function PoModal({
   onDownloadDraft: () => void;
   isEdit?: boolean;
 }) {
-  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; cost_price: number; gram: number | null; meter: number | null }[]>([]);
-  // Inline product-create modal state (triggered from a PO product picker row).
-  const [productCreate, setProductCreate] = useState<{ idx: number; initialName: string } | null>(null);
-
-  const fetchProducts = useCallback(async () => {
-    const { data } = await db
-      .from("purchase_products")
-      .select("id, code, name, cost_price, gram, meter")
-      .order("code");
-    setProducts((data ?? []) as { id: string; code: string | null; name: string; cost_price: number; gram: number | null; meter: number | null }[]);
-  }, []);
-
-  useEffect(() => {
-    void fetchProducts();
-  }, [fetchProducts]);
-
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape" && !saving) onClose();
@@ -2307,42 +2107,36 @@ function PoModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose, saving]);
 
+  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; cost_price: number; expiry_date: string | null }[]>([]);
+  useEffect(() => {
+    let active = true;
+    void db.from("products").select("id, code, name, cost_price, expiry_date").order("name").then(({ data, error }) => {
+      if (!active) return;
+      if (error) { showToast(error.message, "err"); return; }
+      setProducts(data ?? []);
+    });
+    return () => { active = false; };
+  }, []);
+
+  const selectProduct = (idx: number, id: string) => {
+    const product = products.find(p => p.id === id);
+    // Preserve legacy descriptions and deleted catalogue selections.
+    if (id && !product) return;
+    setDraft(d => {
+      if (!d) return null;
+      const items = [...d.items];
+      items[idx] = calcLine({ ...items[idx], productId: product?.id ?? null,
+        description: product?.name ?? "", expiryDate: product?.expiry_date?.slice(0, 10) ?? null,
+        rate: product ? Number(product.cost_price) : 0 });
+      return { ...d, items };
+    });
+  };
+
   const updateLine = (idx: number, field: keyof PoLine, value: string | number) => {
     setDraft((d) => {
       if (!d) return null;
       const items = [...d.items];
       let line = { ...items[idx], [field]: value } as PoLine;
-      line = calcLine(line);
-      items[idx] = line;
-      return { ...d, items };
-    });
-  };
-
-  const selectProduct = (idx: number, productName: string) => {
-    const prod = products.find((p) => p.name === productName);
-    setDraft((d) => {
-      if (!d) return null;
-      const items = [...d.items];
-      let line = { ...items[idx], description: productName };
-      if (prod) line = { ...line, rate: prod.cost_price, gram: prod.gram ?? null, meter: prod.meter ?? null };
-      else line = { ...line, gram: null, meter: null };
-      line = calcLine(line);
-      items[idx] = line;
-      return { ...d, items };
-    });
-  };
-
-  const handleProductCreated = async (newProduct: CreatedPurchaseProduct) => {
-    await fetchProducts();
-    const idx = productCreate?.idx;
-    setProductCreate(null);
-    if (typeof idx !== "number") return;
-    setDraft((d) => {
-      if (!d) return null;
-      const items = [...d.items];
-      const cur = items[idx];
-      if (!cur) return d;
-      let line = { ...cur, description: newProduct.name, rate: newProduct.cost_price, gram: newProduct.gram, meter: newProduct.meter };
       line = calcLine(line);
       items[idx] = line;
       return { ...d, items };
@@ -2385,7 +2179,7 @@ function PoModal({
           style={{ background: "var(--blue-deeper)" }}
         >
           <div>
-            <h2 className="text-[15px] font-extrabold text-white tracking-tight">{isEdit ? "Edit supplier invoice" : "New supplier invoice"}</h2>
+            <h2 className="text-[15px] font-extrabold text-white tracking-tight">{isEdit ? "Edit purchase invoice" : "New purchase invoice"}</h2>
             <p className="text-[11px] text-white/75 mt-0.5 font-mono font-bold">{draft.poNumber || "Auto-assigned on save"}</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -2510,7 +2304,7 @@ function PoModal({
               <table className="w-full text-[12px]">
                 <thead>
                   <tr style={{ background: "var(--gray-50)" }}>
-                    {["#", "Product", "Gram", "MM", "Qty", "Rate", "Amount", ""].map((h) => (
+                    {["#", "Product", "Expiry", "Qty", "Rate", "Amount", ""].map((h) => (
                       <th key={h} className="text-left px-2 py-2 font-bold text-[10px] uppercase tracking-wide" style={{ color: "var(--gray-600)" }}>
                         {h}
                       </th>
@@ -2525,46 +2319,19 @@ function PoModal({
                         <td className="px-2 py-2 text-[var(--gray-500)] w-8">{idx + 1}</td>
                         <td className="px-2 py-2 min-w-[160px]">
                           <SearchableSelect
-                            value={it.description}
-                            onChange={(v) => selectProduct(idx, v)}
-                            options={products.map((p) => {
-                              const tags = [p.gram != null ? `${p.gram}g` : null, p.meter != null ? `${p.meter}mm` : null].filter(Boolean);
-                              const base = tags.length ? `${p.name} (${tags.join(", ")})` : p.name;
-                              return { value: p.name, label: p.code ? `#${p.code} — ${base}` : base };
-                            })}
-                            placeholder="— Product —"
+                            value={it.productId ?? it.description}
+                            onChange={(value) => selectProduct(idx, value)}
+                            options={[
+                              ...products.map(p => ({ value: p.id, label: `${p.code ? `#${p.code} - ` : ""}${p.name}` })),
+                              ...(!it.productId && it.description ? [{ value: it.description, label: it.description }] : []),
+                              ...(it.productId && !products.some(p => p.id === it.productId) ? [{ value: it.productId, label: it.description }] : []),
+                            ]}
+                            placeholder="Select product"
                             inputClassName={sm}
-                            onCreate={(q) => setProductCreate({ idx, initialName: q })}
-                            createLabel="+ Add new product"
                           />
                         </td>
-                        <td className="px-2 py-2 w-20">
-                          <input
-                            type="number"
-                            className={sm}
-                            value={it.gram ?? ""}
-                            placeholder="—"
-                            min={0}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              const parsed = v === "" ? null : Number(v);
-                              updateLine(idx, "gram", parsed as unknown as number);
-                            }}
-                          />
-                        </td>
-                        <td className="px-2 py-2 w-20">
-                          <input
-                            type="number"
-                            className={sm}
-                            value={it.meter ?? ""}
-                            placeholder="—"
-                            min={0}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              const parsed = v === "" ? null : Number(v);
-                              updateLine(idx, "meter", parsed as unknown as number);
-                            }}
-                          />
+                        <td className="px-2 py-2 min-w-[120px] text-[var(--gray-700)]">
+                          {it.expiryDate ? formatDate(it.expiryDate) : "Non-expiry"}
                         </td>
                         <td className="px-2 py-2 w-20">
                           <input
@@ -2645,20 +2412,12 @@ function PoModal({
             className="px-5 py-2.5 rounded-[9px] border-none text-[12px] font-bold cursor-pointer text-white disabled:opacity-45"
             style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))" }}
           >
-            {saving ? <Loader2 size={16} className="animate-spin inline" /> : isEdit ? "Update purchase order" : "Save purchase order"}
+            {saving ? <Loader2 size={16} className="animate-spin inline" /> : isEdit ? "Update purchase invoice" : "Save purchase invoice"}
           </button>
         </div>
       </div>
     </div>
 
-    {productCreate && (
-      <PurchaseProductCreateModal
-        initialName={productCreate.initialName}
-        existingProducts={products}
-        onClose={() => setProductCreate(null)}
-        onCreated={handleProductCreated}
-      />
-    )}
     </>
   );
 }

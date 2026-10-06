@@ -1,0 +1,32 @@
+export class ProductValidationError extends Error {}
+
+export function normalizeCategory(data: Record<string, unknown>) {
+  const name = typeof data.name === "string" ? data.name.trim().replace(/\s+/g, " ") : "";
+  if (!name || name.length > 100) {
+    throw new ProductValidationError("Enter a category name between 1 and 100 characters.");
+  }
+  return { ...data, name, name_key: name.toLowerCase() };
+}
+
+export function normalizeProduct(data: Record<string, unknown>, inserting: boolean): Record<string, unknown> {
+  if (!inserting && ("quantity" in data || "expected_quantity" in data)) {
+    throw new ProductValidationError("Stock quantity cannot be edited after a product is created.");
+  }
+  if (inserting || "quantity" in data) {
+    if (!Number.isSafeInteger(data.quantity) || Number(data.quantity) < 0 || Number(data.quantity) > 2147483647) {
+      throw new ProductValidationError("Stock quantity must be a whole number of zero or more.");
+    }
+  }
+  if (inserting || "category_id" in data) {
+    if (typeof data.category_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.category_id)) {
+      throw new ProductValidationError("Select a product category.");
+    }
+  }
+  if ("expiry_date" in data && data.expiry_date !== null) {
+    const date = data.expiry_date;
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date)) || new Date(date).toISOString().slice(0, 10) !== date) {
+      throw new ProductValidationError("Enter a valid expiry date or select Non-expiry product.");
+    }
+  }
+  return { ...(inserting ? { expiry_date: null } : {}), ...data, pricing_type: "standalone" };
+}

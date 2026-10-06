@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
+import { normalizeCategory, normalizeProduct, ProductValidationError } from "@/lib/productValidation";
+import type { Prisma } from "@prisma/client";
+import { applyStockChange, invoiceStockLines, InventoryError } from "@/lib/inventory";
+import { canAccessTable } from "@/lib/moduleAccess";
 
 // Map Supabase snake_case table names → Prisma camelCase model accessors
 const TABLE_MAP: Record<string, string> = {
   head_accounts: "headAccount",
   accounts: "account",
   products: "product",
+  product_categories: "productCategory",
   cashbook: "cashbook",
   invoices: "invoice",
   invoice_items: "invoiceItem",
@@ -35,6 +40,7 @@ const TABLE_MAP: Record<string, string> = {
 // Supabase auto-discovers FK: accounts.head_id → head_accounts
 // Prisma uses the relation field name declared in the schema
 const RELATION_MAP: Record<string, Record<string, string>> = {
+  products: { product_categories: "category" },
   accounts: { head_accounts: "head_account" },
   invoices: { invoice_items: "items" },
   quick_invoices: { quick_invoice_items: "items" },
@@ -53,7 +59,9 @@ type Order  = { col: string; ascending: boolean };
 
 interface DbRequest {
   table: string;
-  operation: "select" | "insert" | "update" | "delete";
+  operation: "select" | "insert" | "update" | "delete" | "save_invoice";
+  items?: unknown[];
+  invoiceId?: string;
   select?: string;
   filters?: Filter[];
   orders?: Order[];
@@ -156,10 +164,12 @@ function buildOrderBy(orders: Order[]) {
 
 // Date fields per table — Prisma @db.Date requires a Date object, not a bare string
 const DATE_FIELDS: Record<string, string[]> = {
+  products:        ["expiry_date"],
   invoices:        ["invoice_date", "due_date", "job_start", "job_end"],
   cashbook:        ["date"],
   expenses:        ["date"],
   purchase_orders: ["order_date"],
+  purchase_order_items: ["expiry_date"],
   quotations:      ["quote_date"],
   worker_advances: ["date"],
   worker_payments: ["paid_date"],
@@ -253,6 +263,7 @@ async function createPurchaseOrderWithUniquePoNumber(
 // invoices collide on the same client-computed number.
 async function createInvoiceWithUniqueNumber(
   data: Record<string, unknown>,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<{ id: string } & Record<string, unknown>> {
   const stripped = { ...data };
   delete stripped.invoice_number;
@@ -261,8 +272,8 @@ async function createInvoiceWithUniqueNumber(
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const [invRows, qiRows] = await Promise.all([
-      prisma.invoice.findMany({ select: { invoice_number: true } }),
-      prisma.quickInvoice.findMany({ select: { invoice_number: true } }),
+      client.invoice.findMany({ select: { invoice_number: true } }),
+      client.quickInvoice.findMany({ select: { invoice_number: true } }),
     ]);
     let max = 0;
     for (const r of [...invRows, ...qiRows]) {
@@ -274,12 +285,13 @@ async function createInvoiceWithUniqueNumber(
     }
     const candidate = `SSD${String(max + 1).padStart(3, "0")}`;
     try {
-      return (await prisma.invoice.create({
+      return (await client.invoice.create({
         data: { ...stripped, invoice_number: candidate } as unknown as Parameters<typeof prisma.invoice.create>[0]["data"],
       })) as { id: string } & Record<string, unknown>;
     } catch (err) {
       const code = (err as { code?: string } | null)?.code;
       if (code === "P2002") {
+        if (client !== prisma) throw err;
         lastErr = err;
         continue;
       }
@@ -370,6 +382,12 @@ export async function POST(req: NextRequest) {
   if (!payload) {
     return NextResponse.json({ data: null, error: { message: "Unauthorized" } }, { status: 401 });
   }
+  const currentUser = await prisma.user.findUnique({
+    where: { id: payload.sub }, select: { role: true, modules: true, is_active: true },
+  });
+  if (!currentUser?.is_active) {
+    return NextResponse.json({ data: null, error: { message: "Unauthorized" } }, { status: 401 });
+  }
   const authUser: AuthUser = {
     id:    payload.sub,
     email: payload.email,
@@ -379,6 +397,24 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as DbRequest;
   const { table, operation, filters = [], orders = [], limit, single, data, selectAfterMutation, count, head } = body;
   const select = body.select ?? "*";
+
+  const forbidden = () => NextResponse.json({ data: null, error: { message: "You do not have access to this module." } }, { status: 403 });
+  const balanceCacheUpdate = table === "accounts" && operation === "update" && data && !Array.isArray(data)
+    && currentUser.modules.some(id => ["cashbook", "quick-invoice"].includes(id))
+    && Object.keys(data).length > 0 && Object.keys(data).every(key => ["balance", "bal_type"].includes(key));
+  if (!balanceCacheUpdate && !canAccessTable(currentUser, table, operation)) return forbidden();
+  // Relation selections must not bypass the related table's permissions.
+  for (const selection of [select, selectAfterMutation ?? ""]) {
+    for (const relation of selection.matchAll(/([a-z_]+)\s*\(/g)) {
+      if (!canAccessTable(currentUser, relation[1], "select")) return forbidden();
+    }
+  }
+  if (currentUser.role !== "super_admin" && operation !== "select" && data) {
+    // All module writes use scalar fields. Prevent nested Prisma writes to other
+    // modules or relation-based updates that bypass their permission checks.
+    const rows = Array.isArray(data) ? data : [data];
+    if (rows.some(row => Object.values(row).some(value => value !== null && typeof value === "object"))) return forbidden();
+  }
 
   const modelName = TABLE_MAP[table];
   if (!modelName) {
@@ -390,6 +426,51 @@ export async function POST(req: NextRequest) {
 
   try {
     let result: unknown;
+    if (operation === "save_invoice") {
+      if (table !== "invoices" || !data || Array.isArray(data)) throw new InventoryError("Invalid invoice save request.");
+      if (body.invoiceId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.invoiceId)) throw new InventoryError("Invalid invoice ID.");
+      const items = invoiceStockLines(body.items);
+      const header = coerceDates(data, "invoices");
+      if ("items" in header || "id" in header) throw new InventoryError("Invalid invoice fields.");
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const saved = await prisma.$transaction(async tx => {
+            // Updating the header locks the invoice before reading its old items.
+            const invoice = body.invoiceId
+              ? await tx.invoice.update({ where: { id: body.invoiceId }, data: header as Prisma.InvoiceUpdateInput })
+              : await createInvoiceWithUniqueNumber(stampUserFields(header, "invoices", authUser), tx);
+            const previous = body.invoiceId ? await tx.invoiceItem.findMany({ where: { invoice_id: invoice.id } }) : [];
+            for (const line of items) {
+              if (line.product_id || !line.category) continue;
+              const matching = await tx.product.findMany({ where: { name: line.category }, select: { id: true }, take: 2 });
+              if (matching.length > 1) throw new InventoryError("Select the product again so its stock can be identified.");
+              if (matching.length === 1) line.product_id = matching[0].id;
+            }
+            const stockLines = await applyStockChange(tx, previous, items);
+            await tx.invoiceItem.deleteMany({ where: { invoice_id: invoice.id } });
+            await tx.invoiceItem.createMany({ data: items.map((line, index) => ({ ...line, invoice_id: invoice.id, stock_deducted_qty: stockLines[index].stock_deducted_qty })) as Prisma.InvoiceItemCreateManyInput[] });
+            return invoice;
+          }, { timeout: 15000 });
+          return NextResponse.json({ data: serializeForTable(saved, "invoices"), error: null });
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          if (attempt < 4 && (code === "P2034" || (!body.invoiceId && code === "P2002"))) continue;
+          throw err;
+        }
+      }
+    }
+    const prepareData = async (row: Record<string, unknown>, inserting: boolean) => {
+      if (table === "invoice_items") throw new InventoryError("Reload the app to save invoice items together with stock.");
+      if (table === "invoices" && "items" in row) throw new InventoryError("Save invoice items together with stock.");
+      if (table === "product_categories") return normalizeCategory(row);
+      if (table !== "products") return row;
+      const normalized = normalizeProduct(row, inserting);
+      if (typeof normalized.category_id === "string") {
+        const category = await prisma.productCategory.findUnique({ where: { id: normalized.category_id }, select: { id: true } });
+        if (!category) throw new ProductValidationError("This category no longer exists. Select another category.");
+      }
+      return normalized;
+    };
 
     if (operation === "select") {
       const where = buildWhere(filters, table);
@@ -426,11 +507,11 @@ export async function POST(req: NextRequest) {
     if (operation === "insert") {
       if (Array.isArray(data)) {
         await model.createMany({
-          data: data.map((row) => coerceDates(stampUserFields(row, table, authUser), table)),
+          data: await Promise.all(data.map(async (row) => coerceDates(stampUserFields(await prepareData(row, true), table, authUser), table))),
         });
         return NextResponse.json({ data: null, error: null });
       }
-      const stampedRow = coerceDates(stampUserFields(data ?? {}, table, authUser), table);
+      const stampedRow = coerceDates(stampUserFields(await prepareData(data ?? {}, true), table, authUser), table);
       const inserted =
         table === "purchase_orders"
           ? await createPurchaseOrderWithUniquePoNumber(stampedRow)
@@ -459,20 +540,41 @@ export async function POST(req: NextRequest) {
 
     if (operation === "update") {
       const where = buildWhere(filters, table);
-      const updateData = (data ?? {}) as Record<string, unknown>;
+      const updateData = await prepareData((data ?? {}) as Record<string, unknown>, false);
       await model.updateMany({ where, data: coerceDates(updateData, table) });
       return NextResponse.json({ data: null, error: null });
     }
 
     if (operation === "delete") {
       const where = buildWhere(filters, table);
+      if (table === "invoice_items" || table === "invoices") {
+        await prisma.$transaction(async tx => {
+          const matches = table === "invoices"
+            ? await tx.invoice.findMany({ where, select: { id: true } })
+            : await tx.invoiceItem.findMany({ where, select: { invoice_id: true } });
+          const ids = matches.map(row => "id" in row ? row.id : row.invoice_id).filter((id): id is string => !!id);
+          for (const id of [...new Set(ids)].sort()) await tx.$queryRawUnsafe('SELECT id FROM invoices WHERE id = $1::uuid FOR UPDATE', id);
+          const itemWhere = table === "invoices" ? { invoice_id: { in: ids } } : where;
+          const lines = await tx.invoiceItem.findMany({ where: itemWhere });
+          await applyStockChange(tx, lines, []);
+          if (table === "invoices") await tx.invoice.deleteMany({ where: { id: { in: ids } } });
+          else await tx.invoiceItem.deleteMany({ where: { id: { in: lines.map(line => line.id) } } });
+        }, { timeout: 15000 });
+        return NextResponse.json({ data: null, error: null });
+      }
       await model.deleteMany({ where });
       return NextResponse.json({ data: null, error: null });
     }
 
     return NextResponse.json({ data: null, error: { message: "Unknown operation" } }, { status: 400 });
   } catch (err) {
+    if (err instanceof ProductValidationError || err instanceof InventoryError) {
+      return NextResponse.json({ data: null, error: { message: err.message } }, { status: 400 });
+    }
     const code = (err as { code?: string } | null)?.code;
+    if (code === "P2003" && table === "products") {
+      return NextResponse.json({ data: null, error: { message: "This product is used in an invoice and cannot be deleted." } }, { status: 409 });
+    }
     // P2002 = Prisma unique-constraint violation. Surface a clear message +
     // the conflicting field so the client can show something actionable
     // instead of a raw Prisma stack trace (e.g. duplicate invoice_number

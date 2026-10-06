@@ -327,7 +327,7 @@ function isWalkInAccount(accountName: string): boolean {
 
     const methodLabel = normalizePaymentMethod((e as CashbookEntry).method);
     const msg =
-      `*S.S.D*%0A` +
+      `*S.S. Diagnostics*%0A` +
       `%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%0A` +
       `*Name:* ${accountName || "Customer"}%0A` +
       `*Date:* ${formatDate(e.date)}%0A` +
@@ -338,7 +338,7 @@ function isWalkInAccount(accountName: string): boolean {
       `*${e.type === "in" ? "Work Done" : "Payment Received"}:* Rs ${paymentAmt.toLocaleString("en-PK")}%0A` +
       `*Balance:* Rs ${newBal.toLocaleString("en-PK")}%0A` +
       `%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%E2%80%94%0A` +
-      `_Thank you!!_ %F0%9F%99%8F%0A%0A_Auto-generated receipt · S.S.D_`;
+      `_Thank you!!_ %F0%9F%99%8F%0A%0A_Auto-generated receipt · S.S. Diagnostics_`;
 
     // Decode the URL-encoded message for use in share text / WhatsApp text fallback.
     let msgText = msg;
@@ -378,7 +378,7 @@ function isWalkInAccount(accountName: string): boolean {
           </button>
           <button onClick={() => { resetForm(); setShowModal(true); }}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
-            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}>
+            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}>
             <Plus size={14} /> Add Entry
           </button>
         </div>
@@ -548,8 +548,8 @@ function isWalkInAccount(accountName: string): boolean {
                             </button>
                           )}
                           <button onClick={() => void sendWhatsAppLedger(e)} disabled={sendingWhatsAppReceipt}
-                            className="w-7 h-7 rounded-[6px] border-[1.5px] flex items-center justify-center cursor-pointer bg-white transition-all hover:bg-[var(--green-light)]"
-                            style={{ borderColor: "var(--gray-200)", color: "var(--green)" }}
+                            className="w-7 h-7 rounded-[6px] border-[1.5px] flex items-center justify-center cursor-pointer bg-white transition-all hover:bg-[var(--blue-light)]"
+                            style={{ borderColor: "var(--gray-200)", color: "var(--blue)" }}
                             title="Send WhatsApp Receipt">
                             <Send size={13} />
                           </button>
@@ -580,7 +580,7 @@ function isWalkInAccount(accountName: string): boolean {
         >
           <div>
             <div style={{ fontSize: 9, color: "#999", textTransform: "uppercase", letterSpacing: 1 }}>Name</div>
-            <div style={{ fontWeight: 900, color: "#14532d", fontSize: 15, fontFamily: "monospace" }}>
+            <div style={{ fontWeight: 900, color: "#075985", fontSize: 15, fontFamily: "monospace" }}>
               {printReceipt?.accountName || "Customer"}
             </div>
           </div>
@@ -636,7 +636,7 @@ function isWalkInAccount(accountName: string): boolean {
                 fontSize: 13,
                 fontWeight: 900,
                 fontFamily: "monospace",
-                color: (printReceipt ? printReceipt.newBal : 0) >= 0 ? "#14532d" : "#E84040",
+                color: (printReceipt ? printReceipt.newBal : 0) >= 0 ? "#075985" : "#E84040",
               }}
             >
               Rs {(printReceipt ? printReceipt.newBal : 0).toLocaleString("en-PK")}
@@ -644,7 +644,7 @@ function isWalkInAccount(accountName: string): boolean {
           </div>
 
           <div style={{ textAlign: "center", marginTop: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 900, color: "#14532d" }}>
+            <div style={{ fontSize: 11, fontWeight: 900, color: "#075985" }}>
               Thank you!! {"\u{1F44F}"}
             </div>
             <div style={{ fontSize: 10, color: "#777", marginTop: 6, fontWeight: 600 }}>
@@ -711,7 +711,7 @@ function isWalkInAccount(accountName: string): boolean {
                       onClick={() => setFType("in")}
                       className="flex-1 py-2 text-[12.5px] font-semibold border-none cursor-pointer transition-all"
                       style={{
-                        background: fType === "in" ? "var(--green)" : "var(--gray-50)",
+                        background: fType === "in" ? "var(--blue)" : "var(--gray-50)",
                         color: fType === "in" ? "#fff" : "var(--gray-500)",
                       }}>
                       Credit (In)

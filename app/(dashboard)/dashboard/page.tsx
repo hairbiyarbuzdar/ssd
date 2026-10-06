@@ -133,7 +133,7 @@ export default function DashboardPage() {
       <div className="mb-5 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
         <div>
           <h1 className="text-xl font-extrabold" style={{ color: "var(--gray-900)" }}>Dashboard</h1>
-          <p className="text-xs mt-0.5" style={{ color: "var(--gray-800)" }}>S.S.D — Overview</p>
+          <p className="text-xs mt-0.5" style={{ color: "var(--gray-800)" }}>S.S. Diagnostics — Overview</p>
         </div>
 
         <div className="flex flex-col items-stretch sm:items-end gap-2">
@@ -278,7 +278,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="mt-7 pt-4 border-t border-[var(--gray-100)] flex items-center justify-between flex-wrap gap-2">
-        <div className="text-xs font-bold" style={{ color: "var(--gray-900)" }}>S.S.D</div>
+        <div className="text-xs font-bold" style={{ color: "var(--gray-900)" }}>S.S. Diagnostics</div>
         <div className="text-[11px]" style={{ color: "var(--gray-800)" }}>v1.0</div>
       </div>
     </div>

@@ -17,7 +17,7 @@ export interface PurchaseOrderPdfPayload {
     payment_method: string;
     notes: string;
   };
-  items: Array<{ description: string; unit: string; qty: number; rate: number; amount: number }>;
+  items: Array<{ description: string; expiry_date: string | null; qty: number; rate: number; amount: number }>;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -43,13 +43,13 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
           justifyContent: "space-between",
           alignItems: "center",
           padding: "6px 12px",
-          background: "#166534",
+          background: "#0369a1",
           color: "#fff",
           marginBottom: 10,
         }}
       >
         <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>
-          Purchase Order
+          Purchase Invoice
         </span>
         <span style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 13 }}>{po.po_number}</span>
       </div>
@@ -69,7 +69,7 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
           <div style={{ fontSize: 8, color: "#666", textTransform: "uppercase", letterSpacing: 1, marginBottom: 2 }}>
             Supplier
           </div>
-          <div style={{ fontWeight: 900, color: "#166534", fontSize: 16, lineHeight: 1.2 }}>
+          <div style={{ fontWeight: 900, color: "#0369a1", fontSize: 16, lineHeight: 1.2 }}>
             {po.supplier_name}
           </div>
           {po.supplier_phone ? (
@@ -119,13 +119,13 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
           <thead>
             <tr>
-              {["#", "Description", "Unit", "Qty", "Rate", "Amount"].map((h) => {
-                const align = h === "Description" ? "left" : h === "Rate" || h === "Amount" ? "right" : "center";
+              {["#", "Product", "Expiry", "Qty", "Rate", "Amount"].map((h) => {
+                const align = h === "Product" ? "left" : h === "Rate" || h === "Amount" ? "right" : "center";
                 return (
                   <th
                     key={h}
                     style={{
-                      background: "#166534",
+                      background: "#0369a1",
                       color: "#fff",
                       fontWeight: 700,
                       textAlign: align as "left" | "right" | "center",
@@ -167,7 +167,7 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
                     {it.description || "—"}
                   </td>
                   <td style={{ padding: "6px 8px", textAlign: "center", fontFamily: "monospace", borderLeft: "1px solid #e5e7eb" }}>
-                    {it.unit || "—"}
+                    {it.expiry_date ? formatDate(it.expiry_date) : "Non-expiry"}
                   </td>
                   <td style={{ padding: "6px 8px", textAlign: "center", fontFamily: "monospace", fontWeight: 700, borderLeft: "1px solid #e5e7eb" }}>
                     {it.qty}
@@ -175,7 +175,7 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
                   <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: 600, borderLeft: "1px solid #e5e7eb" }}>
                     {formatCurrency(it.rate)}
                   </td>
-                  <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: 800, color: "#166534", borderLeft: "1px solid #e5e7eb", borderRight: "1px solid #e5e7eb" }}>
+                  <td style={{ padding: "6px 8px", textAlign: "right", fontFamily: "monospace", fontWeight: 800, color: "#0369a1", borderLeft: "1px solid #e5e7eb", borderRight: "1px solid #e5e7eb" }}>
                     {formatCurrency(it.amount)}
                   </td>
                 </tr>
@@ -194,11 +194,11 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
               justifyContent: "space-between",
               padding: "6px 10px",
               background: "#f8fafc",
-              borderTop: "2px solid #166534",
+              borderTop: "2px solid #0369a1",
             }}
           >
             <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Grand Total</span>
-            <span style={{ fontFamily: "monospace", fontWeight: 900, fontSize: 14, color: "#166534" }}>
+            <span style={{ fontFamily: "monospace", fontWeight: 900, fontSize: 14, color: "#0369a1" }}>
               {formatCurrency(po.grand_total)}
             </span>
           </div>
@@ -214,7 +214,7 @@ export function PurchaseOrderPdfDocument({ data }: { data: PurchaseOrderPdfPaylo
               justifyContent: "space-between",
               padding: "5px 10px",
               borderTop: "1px solid #e5e7eb",
-              borderBottom: "2px solid #166534",
+              borderBottom: "2px solid #0369a1",
             }}
           >
             <span style={{ fontSize: 10, fontWeight: 600, color: "#555" }}>Remaining</span>

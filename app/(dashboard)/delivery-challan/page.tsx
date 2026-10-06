@@ -112,6 +112,8 @@ export default function DeliveryChallanPage() {
       return;
     }
     setInvoices((data ?? []) as InvoicePick[]);
+    const requestedInvoice = new URLSearchParams(window.location.search).get("invoice");
+    if (requestedInvoice) setInvoiceId(requestedInvoice);
   }, []);
 
   useEffect(() => {
@@ -151,6 +153,15 @@ export default function DeliveryChallanPage() {
         return;
       }
       const items = (rows ?? []) as InvoiceItem[];
+      // Linked invoices may be older than the initial 300-row picker list.
+      setInvoices(current => current.some(row => row.id === id) ? current : [...current, {
+        id,
+        invoice_number: String(inv.invoice_number ?? ""),
+        client_name: String(inv.client_name ?? ""),
+        client_phone: String(inv.client_phone ?? ""),
+        invoice_date: String(inv.invoice_date ?? ""),
+        grand_total: Number(inv.grand_total) || 0,
+      }]);
       setHeaderParty(String(inv.client_name ?? ""));
       setChallanDate(String(inv.invoice_date ?? ""));
       setChallanTime(nowTimeStr());
@@ -224,7 +235,7 @@ export default function DeliveryChallanPage() {
       }
       const safe = (delNo || invoiceRef || "challan").replace(/[^\w.-]+/g, "_");
       const party = (headerParty || "Client").slice(0, 40).replace(/[^\w\s.-]+/g, "").replace(/\s+/g, "_");
-      pdf.save(`DeliveryChallan_${safe}_${party || "SkyDigital"}.pdf`);
+      pdf.save(`DeliveryChallan_${safe}_${party || "SSDiagnostics"}.pdf`);
       showToast("PDF downloaded", "ok");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to generate PDF";
@@ -450,7 +461,7 @@ export default function DeliveryChallanPage() {
         <PrintHeader />
 
         {/* Title bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 8px", background: "#166534", color: "#fff", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 8px", background: "#0369a1", color: "#fff", marginBottom: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 900, letterSpacing: 1.5, textTransform: "uppercase" }}>Delivery Challan</span>
           {invoiceRef ? <span style={{ fontSize: 11, fontWeight: 700 }}>Ref: {invoiceRef}</span> : null}
         </div>

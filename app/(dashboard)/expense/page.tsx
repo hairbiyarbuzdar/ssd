@@ -238,7 +238,7 @@ export default function ExpensePage() {
           type="button"
           onClick={openAdd}
           className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white shrink-0"
-          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+          style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
         >
           <Plus size={16} /> Add Expense
         </button>
@@ -362,7 +362,7 @@ export default function ExpensePage() {
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <span className="font-mono text-[13px] font-extrabold" style={{ color: "var(--blue-deeper)" }}>{p.invoice?.invoice_number ?? "—"}</span>
                       {p.completed
-                        ? <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "var(--green-light)", color: "var(--green)" }}>Completed</span>
+                        ? <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "var(--blue-light)", color: "var(--blue)" }}>Completed</span>
                         : p.expenseTotal === 0
                         ? <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "var(--orange-light)", color: "#B45309" }}>Pending</span>
                         : <span className="px-2 py-0.5 rounded-full text-[9.5px] font-bold uppercase tracking-wide" style={{ background: "var(--blue-pale)", color: "var(--blue-deeper)" }}>{p.count} {p.count === 1 ? "item" : "items"}</span>}
@@ -380,7 +380,7 @@ export default function ExpensePage() {
                       </div>
                       <div>
                         <div className="text-[8.5px] font-bold tracking-wide uppercase mb-0.5" style={{ color: "var(--gray-500)" }}>{profit >= 0 ? "Profit" : "Loss"}</div>
-                        <div className="text-[12.5px] font-extrabold font-mono" style={{ color: profit >= 0 ? "var(--green)" : "var(--red)" }}>{formatCurrency(Math.abs(profit))}</div>
+                        <div className="text-[12.5px] font-extrabold font-mono" style={{ color: profit >= 0 ? "var(--blue)" : "var(--red)" }}>{formatCurrency(Math.abs(profit))}</div>
                       </div>
                     </div>
                   </button>
@@ -775,7 +775,7 @@ function InvoiceExpenseModal({
                           <option value={UNPAID_METHOD}>Unpaid (Credit)</option>
                         </select>
                         <button type="button" onClick={() => void saveEdit(exp)} disabled={saving} title="Save"
-                          className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] border-none bg-transparent cursor-pointer hover:bg-[var(--green-light)] disabled:opacity-50" style={{ color: "var(--green)" }}>
+                          className="inline-flex items-center justify-center w-7 h-7 rounded-[7px] border-none bg-transparent cursor-pointer hover:bg-[var(--blue-light)] disabled:opacity-50" style={{ color: "var(--blue)" }}>
                           <Check size={15} />
                         </button>
                         <button type="button" onClick={cancelEdit} disabled={saving} title="Cancel"
@@ -846,7 +846,7 @@ function InvoiceExpenseModal({
               </button>
             ) : (
               <button type="button" onClick={() => void markCompleted()} disabled={saving || realExpenses.length === 0}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-50" style={{ background: "var(--green)" }}>
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-[9px] text-[12.5px] font-semibold border-none cursor-pointer text-white disabled:opacity-50" style={{ background: "var(--blue)" }}>
                 <Check size={15} /> Mark Completed
               </button>
             )}

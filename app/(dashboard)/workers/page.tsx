@@ -49,7 +49,7 @@ function buildSalaryPaidMessage(w: WorkerWithData, monthLabel: string): string {
   lines.push(``, `Net Paid: *${formatCurrency(Number(p.net_paid))}*`);
   lines.push(`Date: ${formatDate(p.paid_date)}`);
   if (p.notes) lines.push(`Note: ${p.notes}`);
-  lines.push(``, `— S.S.D`);
+  lines.push(``, `— S.S. Diagnostics`);
   return lines.join("\n");
 }
 
@@ -654,7 +654,7 @@ export default function WorkersPage() {
           <button
             onClick={openAddWorker}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-[9px] border-none text-[12.5px] font-semibold cursor-pointer text-white"
-            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(21,128,61,.28)" }}
+            style={{ background: "linear-gradient(135deg, var(--blue-deeper), var(--blue))", boxShadow: "0 2px 10px rgba(2,132,199,.28)" }}
           >
             <Plus size={14} /> Add Worker
           </button>
@@ -800,7 +800,7 @@ export default function WorkersPage() {
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <button onClick={() => openPayWages(w)}
                             className="text-[11px] font-bold px-3 py-1.5 rounded-[8px] border-none cursor-pointer text-white flex items-center gap-1"
-                            style={{ background: "var(--green)" }}>
+                            style={{ background: "var(--blue)" }}>
                             <Wallet size={12} /> Pay Wages
                           </button>
                           <button
@@ -1044,7 +1044,7 @@ export default function WorkersPage() {
                   <button key={s} onClick={() => setWStatus(s)}
                     className="flex-1 py-2 text-[12.5px] font-semibold border-none cursor-pointer transition-all"
                     style={{
-                      background: wStatus === s ? (s === "Active" ? "var(--green)" : "var(--gray-400)") : "var(--gray-50)",
+                      background: wStatus === s ? (s === "Active" ? "var(--blue)" : "var(--gray-400)") : "var(--gray-50)",
                       color: wStatus === s ? "#fff" : "var(--gray-500)",
                     }}>
                     {s}

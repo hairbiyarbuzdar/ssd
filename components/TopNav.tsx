@@ -5,10 +5,11 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, Monitor, FileText, LogOut,
-  Package, BarChart2, Users, Hammer, FileSignature, Truck, ClipboardList, History, UserCog, Receipt,
+  Package, BarChart2, Users, FileSignature, Truck, ClipboardList, History, UserCog, Receipt,
 } from "lucide-react";
 import { db } from "@/lib/db";
 import { getInitials } from "@/lib/helpers";
+import { canAccessPath, firstAllowedPath } from "@/lib/moduleAccess";
 import { useUser } from "@/lib/UserContext";
 
 // These live in the brand bar as text links
@@ -34,7 +35,6 @@ const adminToolbarItems: { name: string; href: string; icon: React.ElementType }
   { name: "Parties", href: "/accounts", icon: Monitor },
   { name: "Make Invoice Walk-In", href: "/quick-invoice", icon: FileText },
   { name: "Expense", href: "/expense", icon: Receipt },
-  { name: "Labor", href: "/labor", icon: Hammer },
   { name: "Workers", href: "/workers", icon: Users },
   { name: "Products", href: "/products", icon: Package },
   { name: "Supplier", href: "/supplier", icon: Truck },
@@ -45,10 +45,6 @@ const adminToolbarItems: { name: string; href: string; icon: React.ElementType }
   { name: "Activity Log",    href: "/activity-log",     icon: History },
 ];
 
-const subUserToolbarItems: { name: string; href: string; icon: React.ElementType }[] = [
-  { name: "Walk-In Invoice", href: "/quick-invoice", icon: FileText },
-  { name: "Parties", href: "/accounts", icon: Monitor },
-];
 
 export default function TopNav() {
   const [email, setEmail] = useState("");
@@ -72,9 +68,9 @@ export default function TopNav() {
   const isSubUser = userProfile?.role === "sub_user";
   const displayName = userProfile?.fullName || email.split("@")[0] || "User";
   const visibleMenuLinks = isSubUser
-    ? []
+    ? menuBarLinks.filter(link => canAccessPath(userProfile, link.href))
     : menuBarLinks.filter((link) => !link.adminOnly || userProfile?.isAdmin);
-  const toolbarItems = isSubUser ? subUserToolbarItems : adminToolbarItems;
+  const toolbarItems = adminToolbarItems.filter(item => canAccessPath(userProfile, item.href));
 
   async function handleLogout() {
     await db.auth.signOut();
@@ -88,15 +84,15 @@ export default function TopNav() {
       <div
         className="flex items-center px-5 h-12 gap-6"
         style={{
-          background: "var(--accent-green)",
+          background: "var(--accent-sky)",
           borderBottom: "1px solid #86efac",
         }}
       >
         {/* Brand — same treatment as login page (app/page.tsx) */}
-        <Link href="/dashboard" className="flex items-center gap-2.5 shrink-0 no-underline" title="Dashboard">
+        <Link href={userProfile ? firstAllowedPath(userProfile) : "/"} className="flex items-center gap-2.5 shrink-0 no-underline" title="Dashboard">
           <img
             src="/brand/logo.svg"
-            alt="S.S.D"
+            alt="S.S. Diagnostics"
             className="h-9 w-[167px] object-contain shrink-0"
           />
         </Link>
@@ -106,7 +102,7 @@ export default function TopNav() {
           {isSubUser && (
             <span
               className="text-[11px] font-semibold px-2.5 py-1 rounded-full text-[var(--blue-deeper)] self-center"
-              style={{ background: "rgba(20,83,45,0.06)" }}
+              style={{ background: "rgba(3,105,161,0.06)" }}
             >
               Sub User
             </span>
@@ -120,10 +116,10 @@ export default function TopNav() {
                 className="relative flex items-center px-3.5 h-12 text-[12.5px] font-semibold no-underline transition-all whitespace-nowrap"
                 style={{
                   color: isActive ? "var(--blue-deeper)" : "var(--gray-700)",
-                  background: isActive ? "rgba(20,83,45,0.10)" : undefined,
+                  background: isActive ? "rgba(3,105,161,0.10)" : undefined,
                 }}
                 onMouseEnter={(e) => {
-                  if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(20,83,45,0.06)";
+                  if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(3,105,161,0.06)";
                 }}
                 onMouseLeave={(e) => {
                   if (!isActive) (e.currentTarget as HTMLElement).style.background = "";

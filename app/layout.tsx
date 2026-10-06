@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "S.S.D — Business Management",
-  description: "S.S.D management system",
+  title: "S.S. Diagnostics — Business Management",
+  description: "S.S. Diagnostics management system",
 };
 
 export default function RootLayout({

@@ -48,7 +48,7 @@ export function buildPaymentReceivedWhatsAppMessage(input: {
   remainingBalanceSigned: number;
 }): string {
   const lines = [
-    "*S.S.D*",
+    "*S.S. Diagnostics*",
     "",
     "Assalam-o-Alaikum,",
     "",
@@ -62,7 +62,7 @@ export function buildPaymentReceivedWhatsAppMessage(input: {
     lines.push(`*Note:* ${input.description.trim()}`);
   }
   lines.push("", formatRemainingBalanceWhatsApp(input.remainingBalanceSigned));
-  lines.push("", "Thank you for your payment.", "", "S.S.D", "", "_Software by AddsMint.com_");
+  lines.push("", "Thank you for your payment.", "", "S.S. Diagnostics", "", "_Software by AddsMint.com_");
   return lines.join("\n");
 }
 
@@ -100,7 +100,7 @@ export function buildInvoiceShareWhatsAppMessage(input: {
 }): string {
   const status = input.paymentStatus.replace(/_/g, " ");
   const lines: string[] = [
-    "*S.S.D*",
+    "*S.S. Diagnostics*",
     "",
     "Assalam-o-Alaikum,",
     "",
@@ -128,7 +128,7 @@ export function buildInvoiceShareWhatsAppMessage(input: {
     });
   }
 
-  lines.push("", "Thank you.", "", "S.S.D", "", "_Software by AddsMint.com_");
+  lines.push("", "Thank you.", "", "S.S. Diagnostics", "", "_Software by AddsMint.com_");
   return lines.join("\n");
 }
 
@@ -147,7 +147,7 @@ export function buildLastTransactionWhatsAppMessage(
   invoiceExtra?: InvoiceExtraForWhatsApp
 ): string {
   const lines: string[] = [
-    "*S.S.D*",
+    "*S.S. Diagnostics*",
     "",
     "Assalam-o-Alaikum,",
     "",
@@ -196,7 +196,7 @@ export function buildLastTransactionWhatsAppMessage(
     "",
     "Thank you.",
     "",
-    "S.S.D",
+    "S.S. Diagnostics",
     "",
     "_Software by AddsMint.com_",
   );
@@ -212,7 +212,7 @@ export function buildSupplierPaymentWhatsAppMessage(input: {
   remainingPayable: number;
 }): string {
   const lines = [
-    "*S.S.D*",
+    "*S.S. Diagnostics*",
     "",
     "Assalam-o-Alaikum,",
     "",
@@ -229,7 +229,7 @@ export function buildSupplierPaymentWhatsAppMessage(input: {
     "",
     "Thank you.",
     "",
-    "S.S.D",
+    "S.S. Diagnostics",
     "",
     "_Software by AddsMint.com_",
   );
