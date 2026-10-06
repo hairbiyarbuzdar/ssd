@@ -93,6 +93,12 @@ input, select, textarea, button { font-family: inherit; }
 @page { size: A4 portrait; margin: 12mm 14mm; }
 
 @media print {
+  .business-print-header {
+    display: block !important;
+    flex-shrink: 0 !important;
+    break-inside: avoid !important;
+    visibility: visible !important;
+  }
   /* Hide the app shell (header, sidebar) and all non-print UI */
   .no-print { display: none !important; }
 
