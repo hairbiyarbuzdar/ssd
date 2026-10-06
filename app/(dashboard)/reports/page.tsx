@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { db } from "@/lib/db";
-import { formatCurrency, formatDate, todayISO } from "@/lib/helpers";
+import { formatCurrency, formatDate } from "@/lib/helpers";
 import {
   Printer, FileText, TrendingDown, Users, CalendarDays,
   ChevronRight, Wallet,
@@ -14,7 +14,7 @@ import { PrintFooter } from "@/components/PrintFooter";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { usePaymentMethods, normalizePaymentMethod } from "@/lib/paymentMethods";
 
-type Tab = "account" | "dailycash" | "dailyparties" | "paymentmethod" | "expense";
+type Tab = "account" | "cashbook" | "dailyparties" | "paymentmethod" | "expense";
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
   paid:    { bg: "var(--green-light)", color: "var(--green)", label: "Paid" },
@@ -22,21 +22,25 @@ const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }
   unpaid:  { bg: "var(--red-light)", color: "var(--red)", label: "Unpaid" },
 };
 
+function reportDateISO(date: Date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function getPresetDates(preset: string): { from: string; to: string } | null {
   const today = new Date();
   const y = today.getFullYear();
   const m = today.getMonth();
   switch (preset) {
     case "thismonth":
-      return { from: new Date(y, m, 1).toISOString().split("T")[0], to: new Date(y, m + 1, 0).toISOString().split("T")[0] };
+      return { from: reportDateISO(new Date(y, m, 1)), to: reportDateISO(new Date(y, m + 1, 0)) };
     case "lastmonth":
-      return { from: new Date(y, m - 1, 1).toISOString().split("T")[0], to: new Date(y, m, 0).toISOString().split("T")[0] };
+      return { from: reportDateISO(new Date(y, m - 1, 1)), to: reportDateISO(new Date(y, m, 0)) };
     case "last3":
-      return { from: new Date(y, m - 2, 1).toISOString().split("T")[0], to: today.toISOString().split("T")[0] };
+      return { from: reportDateISO(new Date(y, m - 2, 1)), to: reportDateISO(today) };
     case "last6":
-      return { from: new Date(y, m - 5, 1).toISOString().split("T")[0], to: today.toISOString().split("T")[0] };
+      return { from: reportDateISO(new Date(y, m - 5, 1)), to: reportDateISO(today) };
     case "thisyear":
-      return { from: new Date(y, 0, 1).toISOString().split("T")[0], to: new Date(y, 11, 31).toISOString().split("T")[0] };
+      return { from: reportDateISO(new Date(y, 0, 1)), to: reportDateISO(new Date(y, 11, 31)) };
     default:
       return null;
   }
@@ -55,7 +59,7 @@ function KpiCard({ label, value, color, sub }: { label: string; value: string; c
 
 const REPORT_CARDS: { id: Tab; title: string; description: string; icon: ReactNode }[] = [
   { id: "account", title: "Account Statement", description: "Debit / credit ledger for one party between two dates.", icon: <FileText size={22} /> },
-  { id: "dailycash", title: "Daily Cashbook", description: "All cash in and out for a single day.", icon: <CalendarDays size={22} /> },
+  { id: "cashbook", title: "Cashbook", description: "All cash in and out between the selected dates.", icon: <CalendarDays size={22} /> },
   { id: "dailyparties", title: "Daily Parties", description: "Invoices issued on a selected day by party.", icon: <Users size={22} /> },
   { id: "paymentmethod", title: "Payment Method Report", description: "Cashbook transactions filtered by a single payment method.", icon: <Wallet size={22} /> },
   { id: "expense", title: "Expense Report", description: "All business expenses for a period, with category, method, and totals.", icon: <TrendingDown size={22} /> },
@@ -108,21 +112,20 @@ export default function ReportsPage() {
   // ── Master filter state ───────────────────────────────────
   const [fromDate, setFromDate] = useState(() => {
     const d = new Date(); d.setDate(1);
-    return d.toISOString().split("T")[0];
+    return reportDateISO(d);
   });
-  const [toDate, setToDate] = useState(todayISO());
+  const [toDate, setToDate] = useState(reportDateISO());
   const [preset, setPreset] = useState("thismonth");
   const [accountFilter, setAccountFilter] = useState("all");
   const [methodFilter, setMethodFilter] = useState("all");
   const { methods: paymentMethods } = usePaymentMethods();
   // ── Daily tab date state ──────────────────────────────────
-  const [dailyDate, setDailyDate] = useState(todayISO());
+  const [dailyDate, setDailyDate] = useState(reportDateISO());
 
   // ── Data ──────────────────────────────────────────────────
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [cashbook, setCashbook] = useState<CashbookEntry[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [dailyCashbook, setDailyCashbook] = useState<CashbookEntry[]>([]);
   const [dailyInvoices, setDailyInvoices] = useState<Invoice[]>([]);
   const [dailyLoading, setDailyLoading] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -170,10 +173,8 @@ export default function ReportsPage() {
   // ── Fetch daily data ──────────────────────────────────────
   const fetchDailyData = useCallback(async () => {
     setDailyLoading(true);
-    const dailyCashbookQuery = db.from("cashbook").select("*").eq("date", dailyDate).order("created_at", { ascending: true });
     const dailyInvoiceQuery = db.from("invoices").select("*").eq("invoice_date", dailyDate).order("created_at", { ascending: true });
-    const [{ data: cbData }, { data: invData }] = await Promise.all([dailyCashbookQuery, dailyInvoiceQuery]);
-    if (cbData) setDailyCashbook(cbData);
+    const { data: invData } = await dailyInvoiceQuery;
     if (invData) setDailyInvoices(invData);
     setDailyLoading(false);
   }, [dailyDate]);
@@ -184,6 +185,10 @@ export default function ReportsPage() {
       setGenerateError("Choose a report type from the cards above.");
       return;
     }
+    if (activeTab !== "dailyparties" && (!fromDate || !toDate || fromDate > toDate)) {
+      setGenerateError("Select a valid date range. From date must be on or before To date.");
+      return;
+    }
     if (activeTab === "account" && accountFilter === "all") {
       setGenerateError("Select an account / party for the account statement.");
       return;
@@ -192,7 +197,7 @@ export default function ReportsPage() {
       setGenerateError("Select a payment method to generate this report.");
       return;
     }
-    if (activeTab === "dailycash" || activeTab === "dailyparties") {
+    if (activeTab === "dailyparties") {
       await fetchDailyData();
     } else {
       await fetchData();
@@ -236,15 +241,15 @@ export default function ReportsPage() {
     return accStatementRows.map((r) => { bal += r.debit - r.credit; return { ...r, balance: bal }; });
   }, [accStatementRows]);
 
-  // ── Derived: daily cashbook running bal ───────────────────
-  const dailyCashWithBal = useMemo(() => {
-    return dailyCashbook.reduce<Array<CashbookEntry & { runningBal: number }>>((acc, c) => {
+  // ── Derived: cashbook running balance ───────────────────
+  const cashbookWithBal = useMemo(() => {
+    return cashbook.reduce<Array<CashbookEntry & { runningBal: number }>>((acc, c) => {
       const prev = acc.length > 0 ? acc[acc.length - 1].runningBal : 0;
       const nextBal = prev + (c.type === "in" ? Number(c.amount) : -Number(c.amount));
       acc.push({ ...c, runningBal: nextBal });
       return acc;
     }, []);
-  }, [dailyCashbook]);
+  }, [cashbook]);
 
   // ── Derived: payment-method filtered cashbook ─────────────
   const methodCashbook = useMemo(() => {
@@ -271,7 +276,7 @@ export default function ReportsPage() {
   const methodCashOut = useMemo(() => methodCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0), [methodCashbook]);
 
   // ── Filter label ──────────────────────────────────────────
-  const filterLabel = `${formatDate(fromDate)} — ${formatDate(toDate)}${accountFilter !== "all" ? ` · ${accountFilter}` : ""}${activeTab === "paymentmethod" && methodFilter !== "all" ? ` · ${methodFilter}` : ""}`;
+  const filterLabel = `${formatDate(fromDate)} — ${formatDate(toDate)}${accountFilter !== "all" && activeTab !== "cashbook" ? ` · ${accountFilter}` : ""}${activeTab === "paymentmethod" && methodFilter !== "all" ? ` · ${methodFilter}` : ""}`;
 
   // ──────────────────────────────────────────────────────────
   return (
@@ -341,7 +346,7 @@ export default function ReportsPage() {
             )}
 
             <div className="flex flex-wrap gap-3 items-end">
-              {activeTab === "dailycash" || activeTab === "dailyparties" ? (
+              {activeTab === "dailyparties" ? (
                 <div className="flex flex-col gap-1">
                   <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>Report date</label>
                   <input
@@ -369,7 +374,7 @@ export default function ReportsPage() {
                         inputStyle={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
                       />
                     </div>
-                  ) : activeTab === "expense" ? null : (
+                  ) : activeTab === "expense" || activeTab === "cashbook" ? null : (
                   <div className="flex flex-col gap-1 min-w-[200px] flex-1 max-w-[280px]">
                     <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
                       Account / Party{activeTab === "account" ? " *" : ""}
@@ -425,7 +430,7 @@ export default function ReportsPage() {
               )}
               <div className="ml-auto text-[11px] font-medium px-3 py-1.5 rounded-[7px] border self-end"
                 style={{ color: "var(--gray-800)", background: "var(--gray-50)", borderColor: "var(--gray-100)" }}>
-                {activeTab === "dailycash" || activeTab === "dailyparties"
+                {activeTab === "dailyparties"
                   ? formatDate(dailyDate)
                   : filterLabel}
               </div>
@@ -539,44 +544,44 @@ export default function ReportsPage() {
           </div>
         )}
 
-        {/* ── TAB: DAILY CASHBOOK ───────────────────────────── */}
-        {reportGenerated && activeTab === "dailycash" && (
+        {/* ── TAB: CASHBOOK ───────────────────────────── */}
+        {reportGenerated && activeTab === "cashbook" && (
           <div>
             {/* Daily KPIs */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
               <KpiCard
                 label="Cash In"
-                value={formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                value={formatCurrency(cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
                 color="var(--green)"
-                sub={`${dailyCashbook.filter((c) => c.type === "in").length} entries`}
+                sub={`${cashbook.filter((c) => c.type === "in").length} entries`}
               />
               <KpiCard
                 label="Cash Out"
-                value={formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                value={formatCurrency(cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
                 color="var(--red)"
-                sub={`${dailyCashbook.filter((c) => c.type === "out").length} entries`}
+                sub={`${cashbook.filter((c) => c.type === "out").length} entries`}
               />
               <KpiCard
                 label="Net for Day"
                 value={formatCurrency(
-                  dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) -
-                  dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
+                  cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) -
+                  cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
                 )}
                 color={
-                  dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) >=
-                  dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
+                  cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0) >=
+                  cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0)
                     ? "var(--green)" : "var(--red)"
                 }
               />
             </div>
 
             <div className="bg-white rounded-[14px] border border-[var(--gray-100)] overflow-hidden" style={{ boxShadow: "var(--shadow-sm)" }}>
-              {dailyLoading ? (
+              {loading ? (
                 <div className="text-center py-10 text-[13px]" style={{ color: "var(--gray-800)" }}>Loading...</div>
-              ) : dailyCashWithBal.length === 0 ? (
+              ) : cashbookWithBal.length === 0 ? (
                 <div className="py-14 text-center">
                   <TrendingDown size={32} className="mx-auto mb-2" style={{ color: "var(--gray-200)" }} />
-                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No cashbook entries for {formatDate(dailyDate)}.</p>
+                  <p className="text-[13px] font-medium" style={{ color: "var(--gray-800)" }}>No cashbook entries from {formatDate(fromDate)} to {formatDate(toDate)}.</p>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -594,7 +599,7 @@ export default function ReportsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {dailyCashWithBal.map((entry, idx) => (
+                      {cashbookWithBal.map((entry, idx) => (
                         <tr key={entry.id} className={DT.row}>
                           <td className={`${DT.tdDense} ${DT.cellBody}`} style={{ color: "var(--gray-800)" }}>{idx + 1}</td>
                           <td className={DT.tdDense}>
@@ -623,17 +628,17 @@ export default function ReportsPage() {
                     <tfoot>
                       <tr style={{ background: "var(--gray-50)" }}>
                         <td colSpan={4} className={`${DT.tdDense} text-[13.5px] font-bold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--gray-700)" }}>
-                          Day Total ({dailyCashWithBal.length} entries)
+                          Range Total ({cashbookWithBal.length} entries)
                         </td>
                         <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--green)" }}>
-                          {formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                          {formatCurrency(cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
                         </td>
                         <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`} style={{ color: "var(--red)" }}>
-                          {formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                          {formatCurrency(cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
                         </td>
                         <td className={`${DT.tdDense} font-mono text-right text-[15px] font-extrabold border-t-2 border-[var(--gray-200)]`}
-                          style={{ color: (dailyCashWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
-                          {formatCurrency(Math.abs(dailyCashWithBal.at(-1)?.runningBal ?? 0))}
+                          style={{ color: (cashbookWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "var(--green)" : "var(--red)" }}>
+                          {formatCurrency(Math.abs(cashbookWithBal.at(-1)?.runningBal ?? 0))}
                         </td>
                       </tr>
                     </tfoot>
@@ -884,24 +889,24 @@ export default function ReportsPage() {
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 10px 8px", marginBottom: 14 }}>
           <div style={{ fontSize: 12, color: "#555" }}>
-            {activeTab === "dailycash" || activeTab === "dailyparties"
+            {activeTab === "dailyparties"
               ? `Date: ${formatDate(dailyDate)}`
               : `Period: ${formatDate(fromDate)} — ${formatDate(toDate)}`}
-            {accountFilter !== "all" && activeTab !== "paymentmethod" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
+            {accountFilter !== "all" && activeTab !== "paymentmethod" && activeTab !== "cashbook" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
             {activeTab === "paymentmethod" && methodFilter !== "all" && <span style={{ marginLeft: 8, color: "#888" }}>· Method: {methodFilter}</span>}
           </div>
           <div style={{ fontWeight: 900, color: "#075985", fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>
-            {{ account: "Account Statement", dailycash: "Daily Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report" }[activeTab]}
+            {{ account: "Account Statement", cashbook: "Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report" }[activeTab]}
           </div>
         </div>
 
         {/* Print summary */}
 
-        {/* Print table for daily cashbook (single day) */}
-        {activeTab === "dailycash" && (
-          dailyCashWithBal.length === 0 ? (
+        {/* Print table for cashbook (selected range) */}
+        {activeTab === "cashbook" && (
+          cashbookWithBal.length === 0 ? (
             <p style={{ fontSize: 12, color: "#666", padding: "12px 10px" }}>
-              No cashbook entries for {formatDate(dailyDate)}.
+              No cashbook entries from {formatDate(fromDate)} to {formatDate(toDate)}.
             </p>
           ) : (
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -913,7 +918,7 @@ export default function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {dailyCashWithBal.map((entry, idx) => (
+                {cashbookWithBal.map((entry, idx) => (
                   <tr key={entry.id} style={{ background: idx % 2 === 0 ? "#fff" : "#fafafa", borderBottom: "1px solid #f0f0f0" }}>
                     <td style={{ padding: "6px 8px", color: "#999" }}>{idx + 1}</td>
                     <td style={{ padding: "6px 8px" }}>{entry.description}</td>
@@ -934,16 +939,16 @@ export default function ReportsPage() {
               <tfoot>
                 <tr style={{ background: "#f3f4f6", borderTop: "2px solid #dc2626" }}>
                   <td colSpan={4} style={{ padding: "8px 8px", fontWeight: 900, fontSize: 12 }}>
-                    Day total — {dailyCashWithBal.length} {dailyCashWithBal.length !== 1 ? "entries" : "entry"}
+                    Range total — {cashbookWithBal.length} {cashbookWithBal.length !== 1 ? "entries" : "entry"}
                   </td>
                   <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#16a34a", fontSize: 13 }}>
-                    {formatCurrency(dailyCashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
+                    {formatCurrency(cashbook.filter((c) => c.type === "in").reduce((s, c) => s + Number(c.amount), 0))}
                   </td>
                   <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", color: "#dc2626", fontSize: 13 }}>
-                    {formatCurrency(dailyCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
+                    {formatCurrency(cashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0))}
                   </td>
-                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", fontSize: 13, color: (dailyCashWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "#16a34a" : "#dc2626" }}>
-                    {formatCurrency(Math.abs(dailyCashWithBal.at(-1)?.runningBal ?? 0))}
+                  <td style={{ padding: "8px 8px", fontWeight: 900, fontFamily: "monospace", fontSize: 13, color: (cashbookWithBal.at(-1)?.runningBal ?? 0) >= 0 ? "#16a34a" : "#dc2626" }}>
+                    {formatCurrency(Math.abs(cashbookWithBal.at(-1)?.runningBal ?? 0))}
                   </td>
                 </tr>
               </tfoot>
