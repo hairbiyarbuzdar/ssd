@@ -291,6 +291,7 @@ export interface PurchaseOrderItem {
   description: string;
   product_id: string | null;
   expiry_date: string | null;
+  stock_received_qty: number;
   unit: string;
   qty: number;
   rate: number;

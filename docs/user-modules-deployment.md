@@ -16,6 +16,7 @@ npm run db:upgrade:stock
 npm run db:upgrade:expiry
 npm run db:upgrade:purchases
 npm run db:upgrade:users
+npm run db:upgrade:batches
 npm run db:generate
 npm run build
 pm2 restart ssd

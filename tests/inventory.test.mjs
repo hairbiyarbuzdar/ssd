@@ -48,6 +48,7 @@ test("invalid quantities and item identities are rejected", () => {
 });
 test("the atomic stock guard allows only one competing sale of the remaining units", async () => {
   let quantity = 5;
+  let remaining = 5;
   const tx = { product: {
     async updateMany({ where, data }) {
       if (where.quantity && quantity < where.quantity.gte) return { count: 0 };
@@ -55,9 +56,13 @@ test("the atomic stock guard allows only one competing sale of the remaining uni
       return { count: 1 };
     },
     async findUnique() { return { name: "Sign", quantity }; },
-  } };
+    async update({ data }) { quantity = data.quantity; },
+  }, stockBatch: {
+    async findMany() { return [{ id: A, remaining_qty: remaining, expiry_date: null }]; },
+    async updateMany({ data }) { remaining -= data.remaining_qty.decrement; return { count: 1 }; },
+  }, stockAllocation: { async upsert() {} } };
   const results = await Promise.allSettled([
-    applyStockChange(tx, [], [line(A, 4)]), applyStockChange(tx, [], [line(A, 4)]),
+    applyStockChange(tx, [], [line(A, 4)], A), applyStockChange(tx, [], [line(A, 4)], B),
   ]);
   assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
   assert.equal(quantity, 1);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { db } from "@/lib/db";
+import { db, savePurchase } from "@/lib/db";
 import { showToast } from "@/components/Toast";
 import { formatCurrency, formatDate, todayISO } from "@/lib/helpers";
 import {
@@ -45,6 +45,8 @@ interface SupplierRow {
 }
 
 interface PoLine {
+  id?: string;
+  stockReceivedQty?: number;
   description: string;
   qty: number;
   rate: number;
@@ -54,6 +56,7 @@ interface PoLine {
 }
 
 interface PoDraft {
+  requestId: string;
   poNumber: string;
   supplierId: string;
   orderDate: string;
@@ -78,6 +81,11 @@ interface SavedPO {
 
 function blankLine(): PoLine {
   return { description: "", qty: 1, rate: 0, amount: 0, productId: null, expiryDate: null };
+}
+
+function purchaseItemsPayload(items: PoLine[]) {
+  return items.map(item => ({ id: item.id, product_id: item.productId, description: item.description,
+    expiry_date: item.expiryDate, qty: item.qty, rate: item.rate }));
 }
 
 function calcLine(line: PoLine): PoLine {
@@ -204,6 +212,7 @@ export default function SupplierPage() {
   const [savedPOs, setSavedPOs] = useState<SavedPO[]>([]);
   const [poDraft, setPoDraft] = useState<PoDraft | null>(null);
   const [editPoId, setEditPoId] = useState<string | null>(null);
+  const purchaseSaveRef = useRef(false);
   const [savingPo, setSavingPo] = useState(false);
 
   const [supplierModal, setSupplierModal] = useState<SupplierRow | null>(null);
@@ -395,6 +404,7 @@ export default function SupplierPage() {
       return;
     }
     setPoDraft({
+      requestId: crypto.randomUUID(),
       poNumber: "",
       supplierId: suppliers[0]?.id ?? "",
       orderDate: todayISO(),
@@ -411,6 +421,7 @@ export default function SupplierPage() {
       return;
     }
     setPoDraft({
+      requestId: crypto.randomUUID(),
       poNumber: "",
       supplierId: s.id,
       orderDate: todayISO(),
@@ -426,11 +437,13 @@ export default function SupplierPage() {
     if (poErr || !poRow) { showToast(poErr?.message || "Could not load PO", "err"); return; }
     const { data: itemRows, error: itemErr } = await db
       .from("purchase_order_items")
-      .select("description, product_id, expiry_date, qty, rate, amount")
+      .select("id, description, product_id, expiry_date, stock_received_qty, qty, rate, amount")
       .eq("purchase_order_id", po.id)
       .order("id", { ascending: true });
     if (itemErr) { showToast(itemErr.message, "err"); return; }
     const items: PoLine[] = ((itemRows ?? []) as Record<string, unknown>[]).map((it) => ({
+      id: String(it.id),
+      stockReceivedQty: Number(it.stock_received_qty),
       description: String(it.description ?? ""),
       qty: Number(it.qty),
       rate: Number(it.rate),
@@ -440,6 +453,7 @@ export default function SupplierPage() {
     }));
     setEditPoId(po.id);
     setPoDraft({
+      requestId: crypto.randomUUID(),
       poNumber: poRow.po_number as string,
       supplierId: (poRow.supplier_id as string) ?? "",
       orderDate: (poRow.order_date as string) ?? todayISO(),
@@ -885,36 +899,11 @@ export default function SupplierPage() {
     const items = poDraft.items.map((it) => calcLine(it));
     const grandTotal = items.reduce((s, it) => s + it.amount, 0);
     if (grandTotal <= 0) { showToast("Add at least one line with an amount", "err"); return; }
-    const { data: existing } = await db.from("purchase_orders").select("amount_paid").eq("id", editPoId).single();
-    const existingPaid = Number(existing?.amount_paid) || 0;
-    const balanceDue = Math.max(0, Math.round((grandTotal - existingPaid) * 100) / 100);
-    const paymentStatus: "unpaid" | "partial" | "paid" =
-      balanceDue <= 0 ? "paid" : existingPaid > 0 ? "partial" : "unpaid";
     setSavingPo(true);
     try {
-      const { error: poErr } = await db.from("purchase_orders").update({
-        order_date: poDraft.orderDate,
-        notes: poDraft.notes.trim(),
-        subtotal: grandTotal,
-        grand_total: grandTotal,
-        balance_due: balanceDue,
-        payment_status: paymentStatus,
-      }).eq("id", editPoId);
-      if (poErr) { showToast(poErr.message, "err"); return; }
-      await db.from("purchase_order_items").delete().eq("purchase_order_id", editPoId);
-      const { error: itemErr } = await db.from("purchase_order_items").insert(
-        items.map((it) => ({
-          purchase_order_id: editPoId,
-          description: it.description.trim() || "Item",
-          product_id: it.productId,
-          expiry_date: it.expiryDate,
-          unit: "qty",
-          qty: it.qty,
-          rate: it.rate,
-          amount: it.amount,
-        }))
-      );
-      if (itemErr) { showToast(itemErr.message, "err"); return; }
+      const { error } = await savePurchase({ order_date: poDraft.orderDate, notes: poDraft.notes.trim() },
+        purchaseItemsPayload(items), editPoId);
+      if (error) { showToast(error.message, "err"); return; }
       showToast(`Purchase invoice ${poDraft.poNumber} updated`, "ok");
       setPoDraft(null);
       setEditPoId(null);
@@ -925,118 +914,100 @@ export default function SupplierPage() {
   }
 
   async function savePurchaseOrder() {
-    if (!poDraft) return;
-    if (editPoId) { await updatePurchaseOrder(); return; }
-    const sup = suppliers.find((x) => x.id === poDraft.supplierId);
-    if (!sup) {
-      showToast("Select a supplier", "err");
-      return;
-    }
-    const items = poDraft.items.map((it) => calcLine(it));
-    const grandTotal = items.reduce((s, it) => s + it.amount, 0);
-    if (grandTotal <= 0) {
-      showToast("Add at least one line with an amount", "err");
-      return;
-    }
-    const { amountPaid, balanceDue, paymentStatus } = computePoPayment(grandTotal, poDraft.amountPaid);
-
-    if (amountPaid > 0) {
-      if (!poDraft.payMethod || !poDraft.payMethod.trim()) {
-        showToast("Please select a payment method", "err");
-        return;
-      }
-      if (!paymentMethods.some((m) => m.name === poDraft.payMethod)) {
-        showToast("Select a valid payment method", "err");
-        return;
-      }
-      const available = await getMethodBalance(poDraft.payMethod);
-      if (amountPaid > available) {
-        showToast(`Not enough funds in "${poDraft.payMethod}" (available ${formatCurrency(available)}). Choose a different payment method.`, "err");
-        return;
-      }
-    }
-
-    setSavingPo(true);
+    if (purchaseSaveRef.current) return;
+    purchaseSaveRef.current = true;
     try {
-      const { data: poRow, error: poErr } = await db
-        .from("purchase_orders")
-        .insert({
-          supplier_id: sup.id,
-          supplier_name: sup.name,
-          supplier_phone: sup.phone.trim(),
-          order_date: poDraft.orderDate,
-          notes: poDraft.notes.trim(),
-          subtotal: grandTotal,
-          grand_total: grandTotal,
-          amount_paid: amountPaid,
-          balance_due: balanceDue,
-          payment_status: paymentStatus,
-          payment_method: poDraft.payMethod,
-        })
-        .select()
-        .single();
-
-      if (poErr || !poRow) {
-        showToast(poErr?.message || "Could not save purchase invoice", "err");
+      if (!poDraft) return;
+      if (editPoId) { await updatePurchaseOrder(); return; }
+      const sup = suppliers.find((x) => x.id === poDraft.supplierId);
+      if (!sup) {
+        showToast("Select a supplier", "err");
         return;
       }
-      const assignedPoNumber = String((poRow as { po_number: string }).po_number);
-
-      const { error: itemErr } = await db.from("purchase_order_items").insert(
-        items.map((it) => ({
-          purchase_order_id: poRow.id,
-          description: it.description.trim() || "Item",
-          product_id: it.productId,
-          expiry_date: it.expiryDate,
-          unit: "qty",
-          qty: it.qty,
-          rate: it.rate,
-          amount: it.amount,
-        }))
-      );
-      if (itemErr) {
-        showToast(itemErr.message, "err");
+      const items = poDraft.items.map((it) => calcLine(it));
+      const grandTotal = items.reduce((s, it) => s + it.amount, 0);
+      if (grandTotal <= 0) {
+        showToast("Add at least one line with an amount", "err");
         return;
       }
+      const { amountPaid, balanceDue } = computePoPayment(grandTotal, poDraft.amountPaid);
 
       if (amountPaid > 0) {
-        const { data: cb, error: cbErr } = await db
-          .from("cashbook")
-          .insert({
-            type: "out",
-            description: `Purchase invoice ${assignedPoNumber} — ${sup.name}`,
-            amount: amountPaid,
-            date: poDraft.orderDate,
-            method: poDraft.payMethod,
-            reference: String(poRow.id),
-            account_name: sup.name,
-          })
-          .select()
-          .single();
-        if (cbErr) {
-          showToast(`PO saved but cashbook error: ${cbErr.message}`, "err");
-        } else if (cb) {
-          await db.from("purchase_orders").update({ cashbook_entry_id: cb.id }).eq("id", poRow.id);
-          const waMsg = buildSupplierPaymentWhatsAppMessage({
-            supplierName: sup.name,
-            amount: amountPaid,
-            dateISO: poDraft.orderDate,
-            method: poDraft.payMethod,
-            description: `Advance/paid amount for PO ${assignedPoNumber}`,
-            remainingPayable: Math.max(0, balanceDue),
-          });
-          if (!openWhatsAppNewTab(sup.phone || "", waMsg)) {
-            showToast("PO saved. Add supplier phone to send WhatsApp payment notice.", "info");
-          }
+        if (!poDraft.payMethod || !poDraft.payMethod.trim()) {
+          showToast("Please select a payment method", "err");
+          return;
+        }
+        if (!paymentMethods.some((m) => m.name === poDraft.payMethod)) {
+          showToast("Select a valid payment method", "err");
+          return;
+        }
+        const available = await getMethodBalance(poDraft.payMethod);
+        if (amountPaid > available) {
+          showToast(`Not enough funds in "${poDraft.payMethod}" (available ${formatCurrency(available)}). Choose a different payment method.`, "err");
+          return;
         }
       }
 
-      showToast(`Purchase invoice ${assignedPoNumber} saved`, "ok");
-      setPoDraft(null);
-      void fetchPOs();
-    } finally {
-      setSavingPo(false);
-    }
+      setSavingPo(true);
+      try {
+        const { data: poRow, error: poErr } = await savePurchase({
+          supplier_id: sup.id, order_date: poDraft.orderDate, notes: poDraft.notes.trim(),
+          amount_paid: amountPaid, payment_method: poDraft.payMethod,
+        }, purchaseItemsPayload(items), undefined, poDraft.requestId);
+        if (poErr || !poRow) {
+          showToast(poErr?.message || "Could not save purchase invoice", "err");
+          return;
+        }
+        const assignedPoNumber = String((poRow as { po_number: string }).po_number);
+
+        setEditPoId(String(poRow.id));
+        setPoDraft(current => current ? { ...current, items: (poRow.items as Record<string, unknown>[]).map(row => ({
+          id: String(row.id), productId: row.product_id ? String(row.product_id) : null,
+          stockReceivedQty: Number(row.stock_received_qty),
+          description: String(row.description), qty: Number(row.qty), rate: Number(row.rate), amount: Number(row.amount),
+          expiryDate: row.expiry_date ? String(row.expiry_date).slice(0, 10) : null,
+        })) } : null);
+
+        if (amountPaid > 0 && !poRow.cashbook_entry_id) {
+          const { data: cb, error: cbErr } = await db
+            .from("cashbook")
+            .insert({
+              type: "out",
+              description: `Purchase invoice ${assignedPoNumber} — ${sup.name}`,
+              amount: amountPaid,
+              date: poDraft.orderDate,
+              method: poDraft.payMethod,
+              reference: String(poRow.id),
+              account_name: sup.name,
+            })
+            .select()
+            .single();
+          if (cbErr) {
+            showToast(`PO saved but cashbook error: ${cbErr.message}`, "err");
+          } else if (cb) {
+            await db.from("purchase_orders").update({ cashbook_entry_id: cb.id }).eq("id", poRow.id);
+            const waMsg = buildSupplierPaymentWhatsAppMessage({
+              supplierName: sup.name,
+              amount: amountPaid,
+              dateISO: poDraft.orderDate,
+              method: poDraft.payMethod,
+              description: `Advance/paid amount for PO ${assignedPoNumber}`,
+              remainingPayable: Math.max(0, balanceDue),
+            });
+            if (!openWhatsAppNewTab(sup.phone || "", waMsg)) {
+              showToast("PO saved. Add supplier phone to send WhatsApp payment notice.", "info");
+            }
+          }
+        }
+
+        showToast(`Purchase invoice ${assignedPoNumber} saved`, "ok");
+        setEditPoId(null);
+        setPoDraft(null);
+        void fetchPOs();
+      } finally {
+        setSavingPo(false);
+      }
+    } finally { purchaseSaveRef.current = false; }
   }
 
   async function downloadPoPdf(po: SavedPO) {
@@ -2132,7 +2103,7 @@ function PoModal({
     });
   };
 
-  const updateLine = (idx: number, field: keyof PoLine, value: string | number) => {
+  const updateLine = (idx: number, field: keyof PoLine, value: string | number | null) => {
     setDraft((d) => {
       if (!d) return null;
       const items = [...d.items];
@@ -2300,6 +2271,7 @@ function PoModal({
                 <Plus size={12} /> Add line
               </button>
             </div>
+            <p className="text-xs mb-2 text-[var(--gray-700)]">New purchase invoices add stock. Sales use the oldest purchase batch first.</p>
             <div className="overflow-x-auto border border-[var(--gray-100)] rounded-xl">
               <table className="w-full text-[12px]">
                 <thead>
@@ -2329,15 +2301,25 @@ function PoModal({
                             placeholder="Select product"
                             inputClassName={sm}
                           />
+                          {it.id && it.stockReceivedQty === 0 && <p className="mt-1 text-[10px] text-[var(--gray-700)]">Historical purchase; existing stock is counted in opening batches.</p>}
                         </td>
                         <td className="px-2 py-2 min-w-[120px] text-[var(--gray-700)]">
-                          {it.expiryDate ? formatDate(it.expiryDate) : "Non-expiry"}
+                          <label className="block text-[10px] font-semibold mb-1">Expiry date
+                            <input type="date" value={it.expiryDate ?? ""} disabled={!it.productId || saving || !it.expiryDate}
+                              onChange={event => updateLine(idx, "expiryDate", event.target.value || null)} className={sm} />
+                          </label>
+                          <label className="inline-flex items-center gap-1.5 text-[11px]">
+                            <input type="checkbox" checked={!it.expiryDate} disabled={!it.productId || saving}
+                              onChange={event => updateLine(idx, "expiryDate", event.target.checked ? null : todayISO())} /> Non-expiry
+                          </label>
                         </td>
                         <td className="px-2 py-2 w-20">
                           <input
                             type="number"
                             className={sm}
                             value={it.qty || ""}
+                            min={1}
+                            step={1}
                             placeholder="Qty"
                             onChange={(e) => updateLine(idx, "qty", parseFloat(e.target.value) || 1)}
                           />

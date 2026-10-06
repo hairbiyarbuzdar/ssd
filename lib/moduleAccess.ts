@@ -66,6 +66,7 @@ const READ_DEPENDENCIES: Record<string, string[]> = {
 export function canAccessTable(profile: AccessProfile, table: string, operation: string): boolean {
   if (profile.role === "super_admin") return true;
   const modules = profile.modules ?? DEFAULT_MODULES;
+  if (table === "stock_batches") return operation === "select" && canAccessTable(profile, "products", "select");
   if (operation === "insert" && table === "activity_log") return modules.length > 0;
   if (operation === "select") {
     if (table in TABLE_MODULES && modules.some(id => ["dashboard", "reports"].includes(id))) return true;

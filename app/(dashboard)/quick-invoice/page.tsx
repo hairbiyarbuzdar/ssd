@@ -157,7 +157,7 @@ export default function InvoicePage() {
   const userProfile = useUser();
   const router = useRouter();
   const { methods: paymentMethods } = usePaymentMethods();
-  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }[]>([]);
+  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[]>([]);
   const [nextNum, setNextNum] = useState(1);
   const [savedInvoices, setSavedInvoices] = useState<SavedInvoice[]>([]);
   const [allAccounts, setAllAccounts] = useState<{ id: string; name: string; category: string }[]>([]);
@@ -326,7 +326,7 @@ export default function InvoicePage() {
   }, []);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity");
     if (data) {
       const sorted = [...data].sort((a, b) => {
         const an = parseInt(String(a.code ?? ""), 10);
@@ -356,7 +356,7 @@ export default function InvoicePage() {
   const pendingProductIdsRef = useRef<string[]>([]);
   const invoiceSaveRef = useRef(false);
 
-  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }) => {
+  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }) => {
     pendingProductIdsRef.current.push(newProduct.id);
     await fetchProducts();
     const idx = productCreate?.idx;
@@ -408,6 +408,7 @@ export default function InvoicePage() {
   }
 
   function openModal() {
+    void fetchProducts();
     setDraft({
       invoiceNumber: `SSD${String(nextNum).padStart(3, "0")}`,
       clientName: "",
@@ -691,6 +692,7 @@ export default function InvoicePage() {
       pendingProductIdsRef.current = [];
       setDraft(null);
       setSaving(false);
+      void fetchProducts();
       refreshCount();
       fetchSaved();
       void refreshWalkInStats();
@@ -1023,6 +1025,7 @@ export default function InvoicePage() {
         amount: Number(inv.grand_total ?? 0) || null,
       });
       showToast("Invoice deleted", "ok");
+      void fetchProducts();
       void fetchSaved();
       void refreshCount();
       void refreshWalkInStats();
@@ -1654,7 +1657,7 @@ function WalkInInvoiceModal({
 }: {
   draft: WalkInDraft;
   setDraft: React.Dispatch<React.SetStateAction<WalkInDraft | null>>;
-  products: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }[];
+  products: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[];
   paymentMethods: { id: string; name: string }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
@@ -2115,4 +2118,3 @@ function ModalActionBtn({ children, onClick, bg, color, border }: { children: Re
     </button>
   );
 }
-

@@ -21,6 +21,17 @@ export async function saveInvoice(invoice: Record<string, unknown>, items: Recor
   }
 }
 
+/** Purchase items and received batches commit together; requestId makes creates retry-safe. */
+export async function savePurchase(purchase: Record<string, unknown>, items: Record<string, unknown>[], purchaseId?: string, requestId?: string): Promise<DbResult> {
+  try {
+    const response = await fetch("/api/db", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ table: "purchase_orders", operation: "save_purchase", data: purchase, items, purchaseId, requestId }) });
+    return await response.json();
+  } catch {
+    return { data: null, error: { message: "Could not confirm purchase save. Reload the invoice list before trying again." } };
+  }
+}
+
 interface DbPayload {
   table: string;
   operation: "select" | "insert" | "update" | "delete";

@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyToken, COOKIE_NAME } from "@/lib/auth";
 import { normalizeCategory, normalizeProduct, ProductValidationError } from "@/lib/productValidation";
+import { purchaseLines, purchaseDate, receivePurchaseItems } from "@/lib/purchaseInventory";
 import type { Prisma } from "@prisma/client";
-import { applyStockChange, invoiceStockLines, InventoryError } from "@/lib/inventory";
+import { applyStockChange, invoiceStockLines, InventoryError, createOpeningBatch } from "@/lib/inventory";
 import { canAccessTable } from "@/lib/moduleAccess";
 
 // Map Supabase snake_case table names → Prisma camelCase model accessors
@@ -11,6 +12,7 @@ const TABLE_MAP: Record<string, string> = {
   head_accounts: "headAccount",
   accounts: "account",
   products: "product",
+  stock_batches: "stockBatch",
   product_categories: "productCategory",
   cashbook: "cashbook",
   invoices: "invoice",
@@ -59,7 +61,9 @@ type Order  = { col: string; ascending: boolean };
 
 interface DbRequest {
   table: string;
-  operation: "select" | "insert" | "update" | "delete" | "save_invoice";
+  operation: "select" | "insert" | "update" | "delete" | "save_invoice" | "save_purchase";
+  purchaseId?: string;
+  requestId?: string;
   items?: unknown[];
   invoiceId?: string;
   select?: string;
@@ -165,6 +169,7 @@ function buildOrderBy(orders: Order[]) {
 // Date fields per table — Prisma @db.Date requires a Date object, not a bare string
 const DATE_FIELDS: Record<string, string[]> = {
   products:        ["expiry_date"],
+  stock_batches:   ["expiry_date", "received_date"],
   invoices:        ["invoice_date", "due_date", "job_start", "job_end"],
   cashbook:        ["date"],
   expenses:        ["date"],
@@ -216,6 +221,7 @@ interface AuthUser {
 // to that number.
 async function createPurchaseOrderWithUniquePoNumber(
   data: Record<string, unknown>,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<{ id: string } & Record<string, unknown>> {
   const stripped = { ...data };
   delete stripped.po_number;
@@ -223,7 +229,7 @@ async function createPurchaseOrderWithUniquePoNumber(
   const MAX_ATTEMPTS = 12;
   let lastErr: unknown = null;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const rows = await prisma.purchaseOrder.findMany({ select: { po_number: true } });
+    const rows = await client.purchaseOrder.findMany({ select: { po_number: true } });
     let max = 0;
     for (const r of rows) {
       const m = /(\d+)$/.exec(r.po_number);
@@ -234,7 +240,7 @@ async function createPurchaseOrderWithUniquePoNumber(
     }
     const candidate = `PO${String(max + 1).padStart(3, "0")}`;
     try {
-      return (await prisma.purchaseOrder.create({
+      return (await client.purchaseOrder.create({
         // The generic /api/db route hands us a Record<string, unknown>; the
         // Prisma create input is fully typed, but here we trust the caller's
         // shape (matched to the schema) — the ergonomic alternative would be
@@ -245,6 +251,7 @@ async function createPurchaseOrderWithUniquePoNumber(
     } catch (err) {
       const code = (err as { code?: string } | null)?.code;
       if (code === "P2002") {
+        if (client !== prisma) throw err;
         lastErr = err;
         continue;
       }
@@ -426,6 +433,46 @@ export async function POST(req: NextRequest) {
 
   try {
     let result: unknown;
+    if (operation === "save_purchase") {
+      if (table !== "purchase_orders" || !data || Array.isArray(data)) throw new InventoryError("Invalid purchase save request.");
+      const id = body.purchaseId ?? body.requestId;
+      if (!id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new InventoryError("Invalid purchase ID. Reload the app.");
+      const items = purchaseLines(body.items);
+      const orderDate = purchaseDate(data.order_date)!;
+      const total = Math.round(items.reduce((sum, line) => sum + line.amount, 0) * 100) / 100;
+      if (total <= 0 || total > 9999999999.99) throw new InventoryError("Enter a valid purchase total greater than zero.");
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          const saved = await prisma.$transaction(async tx => {
+            await tx.$queryRawUnsafe('SELECT id FROM purchase_orders WHERE id = $1::uuid FOR UPDATE', id);
+            const previous = await tx.purchaseOrder.findUnique({ where: { id } });
+            if (!body.purchaseId && previous) return { ...previous, items: await tx.purchaseOrderItem.findMany({ where: { purchase_order_id: id } }) }; // Never receive twice.
+            if (body.purchaseId && !previous) throw new InventoryError("Purchase invoice not found.");
+            const supplierId = previous?.supplier_id ?? String(data.supplier_id ?? "");
+            if (!/^[0-9a-f-]{36}$/i.test(supplierId ?? "")) throw new InventoryError("Select a supplier.");
+            const supplier = await tx.supplier.findUnique({ where: { id: supplierId! } });
+            if (!supplier) throw new InventoryError("This supplier no longer exists.");
+            const paid = previous ? Number(previous.amount_paid) : Number(data.amount_paid ?? 0);
+            if (!Number.isFinite(paid) || paid < 0 || paid > total) throw new InventoryError("Purchase total cannot be lower than the amount already paid.");
+            const balance = Math.round((total - paid) * 100) / 100;
+            const header = { order_date: orderDate, notes: String(data.notes ?? ""), subtotal: total, grand_total: total,
+              balance_due: balance, payment_status: balance <= 0 ? "paid" : paid > 0 ? "partial" : "unpaid" };
+            const purchase = previous
+              ? await tx.purchaseOrder.update({ where: { id }, data: header })
+              : await createPurchaseOrderWithUniquePoNumber(stampUserFields({ ...header, id, supplier_id: supplier.id,
+                  supplier_name: supplier.name, supplier_phone: supplier.phone, amount_paid: paid,
+                  payment_method: String(data.payment_method ?? "Cash") }, table, authUser), tx);
+            const savedItems = await receivePurchaseItems(tx, purchase.id, items, orderDate);
+            return { ...purchase, items: savedItems };
+          }, { timeout: 20000 });
+          return NextResponse.json({ data: serializeForTable(saved, table), error: null });
+        } catch (error) {
+          const code = (error as { code?: string }).code;
+          if (attempt < 4 && ["P2034", "P2002"].includes(code ?? "")) continue;
+          throw error;
+        }
+      }
+    }
     if (operation === "save_invoice") {
       if (table !== "invoices" || !data || Array.isArray(data)) throw new InventoryError("Invalid invoice save request.");
       if (body.invoiceId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.invoiceId)) throw new InventoryError("Invalid invoice ID.");
@@ -446,7 +493,7 @@ export async function POST(req: NextRequest) {
               if (matching.length > 1) throw new InventoryError("Select the product again so its stock can be identified.");
               if (matching.length === 1) line.product_id = matching[0].id;
             }
-            const stockLines = await applyStockChange(tx, previous, items);
+            const stockLines = await applyStockChange(tx, previous, items, invoice.id);
             await tx.invoiceItem.deleteMany({ where: { invoice_id: invoice.id } });
             await tx.invoiceItem.createMany({ data: items.map((line, index) => ({ ...line, invoice_id: invoice.id, stock_deducted_qty: stockLines[index].stock_deducted_qty })) as Prisma.InvoiceItemCreateManyInput[] });
             return invoice;
@@ -460,6 +507,9 @@ export async function POST(req: NextRequest) {
       }
     }
     const prepareData = async (row: Record<string, unknown>, inserting: boolean) => {
+      if (table === "stock_batches" || table === "purchase_order_items" || (table === "purchase_orders" && inserting)) throw new InventoryError("Reload the app to save purchases together with their stock batches.");
+      if (table === "purchase_orders" && Object.keys(row).some(key => !["amount_paid", "balance_due", "payment_status", "cashbook_entry_id"].includes(key))) throw new InventoryError("Save purchase changes together with stock batches.");
+      if (table === "products" && !inserting && "expiry_date" in row) throw new InventoryError("Change expiry in the purchase invoice for that batch.");
       if (table === "invoice_items") throw new InventoryError("Reload the app to save invoice items together with stock.");
       if (table === "invoices" && "items" in row) throw new InventoryError("Save invoice items together with stock.");
       if (table === "product_categories") return normalizeCategory(row);
@@ -506,6 +556,16 @@ export async function POST(req: NextRequest) {
 
     if (operation === "insert") {
       if (Array.isArray(data)) {
+        if (table === "products") {
+          const rows = await Promise.all(data.map(async row => coerceDates(await prepareData(row, true), table)));
+          await prisma.$transaction(async tx => {
+            for (const row of rows) {
+              const product = await tx.product.create({ data: row as Prisma.ProductUncheckedCreateInput });
+              await createOpeningBatch(tx, product);
+            }
+          });
+          return NextResponse.json({ data: null, error: null });
+        }
         await model.createMany({
           data: await Promise.all(data.map(async (row) => coerceDates(stampUserFields(await prepareData(row, true), table, authUser), table))),
         });
@@ -513,7 +573,13 @@ export async function POST(req: NextRequest) {
       }
       const stampedRow = coerceDates(stampUserFields(await prepareData(data ?? {}, true), table, authUser), table);
       const inserted =
-        table === "purchase_orders"
+        table === "products"
+          ? await prisma.$transaction(async tx => {
+              const product = await tx.product.create({ data: stampedRow as Prisma.ProductUncheckedCreateInput });
+              await createOpeningBatch(tx, product);
+              return product;
+            })
+          : table === "purchase_orders"
           ? await createPurchaseOrderWithUniquePoNumber(stampedRow)
           : table === "invoices"
           ? await createInvoiceWithUniqueNumber(stampedRow)
@@ -547,6 +613,20 @@ export async function POST(req: NextRequest) {
 
     if (operation === "delete") {
       const where = buildWhere(filters, table);
+      if (["purchase_orders", "purchase_order_items", "stock_batches"].includes(table)) throw new InventoryError("Purchase batches cannot be deleted directly. Edit the purchase invoice instead.");
+      if (table === "products") {
+        await prisma.$transaction(async tx => {
+          const products = await tx.product.findMany({ where, select: { id: true }, orderBy: { id: "asc" } });
+          for (const product of products) await tx.$queryRawUnsafe('SELECT id FROM products WHERE id = $1::uuid FOR UPDATE', product.id);
+          const batches = await tx.stockBatch.findMany({ where: { product_id: { in: products.map(product => product.id) } } });
+          const allocations = await tx.stockAllocation.findMany({ where: { batch_id: { in: batches.map(batch => batch.id) } }, take: 1 });
+          if (batches.some(batch => batch.purchase_item_id) || allocations.length) throw new InventoryError("This product has purchase or sale history and cannot be deleted.");
+          // An unused opening batch can be removed when its product is cancelled.
+          await tx.stockBatch.deleteMany({ where: { id: { in: batches.map(batch => batch.id) } } });
+          await tx.product.deleteMany({ where: { id: { in: products.map(product => product.id) } } });
+        });
+        return NextResponse.json({ data: null, error: null });
+      }
       if (table === "invoice_items" || table === "invoices") {
         await prisma.$transaction(async tx => {
           const matches = table === "invoices"
@@ -556,7 +636,7 @@ export async function POST(req: NextRequest) {
           for (const id of [...new Set(ids)].sort()) await tx.$queryRawUnsafe('SELECT id FROM invoices WHERE id = $1::uuid FOR UPDATE', id);
           const itemWhere = table === "invoices" ? { invoice_id: { in: ids } } : where;
           const lines = await tx.invoiceItem.findMany({ where: itemWhere });
-          await applyStockChange(tx, lines, []);
+          for (const id of [...new Set(ids)].sort()) await applyStockChange(tx, lines.filter(line => line.invoice_id === id), [], id);
           if (table === "invoices") await tx.invoice.deleteMany({ where: { id: { in: ids } } });
           else await tx.invoiceItem.deleteMany({ where: { id: { in: lines.map(line => line.id) } } });
         }, { timeout: 15000 });

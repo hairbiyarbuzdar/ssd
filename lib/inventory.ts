@@ -35,7 +35,71 @@ export function planStockChange(previous: StockLine[], next: Omit<StockLine, "st
   return { lines, deltas };
 }
 
-export async function applyStockChange(tx: Prisma.TransactionClient, previous: StockLine[], next: Omit<StockLine, "stock_deducted_qty">[]) {
+export async function syncProductStock(tx: Prisma.TransactionClient, productId: string) {
+  const batches = await tx.stockBatch.findMany({ where: { product_id: productId, remaining_qty: { gt: 0 } },
+    orderBy: [{ received_date: "asc" }, { created_at: "asc" }, { id: "asc" }] });
+  const quantity = batches.reduce((sum, batch) => sum + batch.remaining_qty, 0);
+  if (!Number.isSafeInteger(quantity) || quantity > 2147483647) throw new InventoryError("Total product stock is too large.");
+  await tx.product.update({ where: { id: productId }, data: {
+    quantity,
+    expiry_date: batches[0]?.expiry_date ?? null,
+  } });
+}
+
+export async function createOpeningBatch(tx: Prisma.TransactionClient, product: {
+  id: string; quantity: number; expiry_date: Date | null; created_at: Date;
+}) {
+  if (product.quantity < 1) return;
+  await tx.stockBatch.create({ data: { product_id: product.id, received_qty: product.quantity,
+    remaining_qty: product.quantity, expiry_date: product.expiry_date, received_date: product.created_at } });
+}
+
+async function adjustBatches(tx: Prisma.TransactionClient, productId: string, consumed: number, invoiceId: string) {
+  if (consumed > 0) {
+    const batches = await tx.stockBatch.findMany({ where: { product_id: productId, remaining_qty: { gt: 0 } },
+      orderBy: [{ received_date: "asc" }, { created_at: "asc" }, { id: "asc" }] });
+    let needed = consumed;
+    for (const batch of batches) {
+      const qty = Math.min(needed, batch.remaining_qty);
+      if (!qty) break;
+      const changed = await tx.stockBatch.updateMany({ where: { id: batch.id, remaining_qty: { gte: qty } }, data: { remaining_qty: { decrement: qty } } });
+      if (changed.count !== 1) throw new InventoryError("Stock changed during this sale. Try saving again.");
+      await tx.stockAllocation.upsert({ where: { invoice_id_batch_id: { invoice_id: invoiceId, batch_id: batch.id } },
+        create: { invoice_id: invoiceId, batch_id: batch.id, qty }, update: { qty: { increment: qty } } });
+      needed -= qty;
+    }
+    if (needed) throw new InventoryError("Product stock and batches do not match. Reload before saving.");
+  } else {
+    let returned = -consumed;
+    const allocations = await tx.stockAllocation.findMany({ where: { invoice_id: invoiceId, batch: { product_id: productId } },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }] });
+    for (const allocation of allocations) {
+      const qty = Math.min(returned, allocation.qty);
+      if (!qty) break;
+      await tx.stockBatch.update({ where: { id: allocation.batch_id }, data: { remaining_qty: { increment: qty } } });
+      if (qty === allocation.qty) await tx.stockAllocation.delete({ where: { id: allocation.id } });
+      else await tx.stockAllocation.update({ where: { id: allocation.id }, data: { qty: { decrement: qty } } });
+      returned -= qty;
+    }
+    if (returned) {
+      // Deductions recorded before batch tracking have no allocation records.
+      const opening = await tx.stockBatch.findMany({ where: { product_id: productId, purchase_item_id: null },
+        orderBy: [{ received_date: "asc" }, { created_at: "asc" }, { id: "asc" }], take: 1 });
+      if (opening[0]) {
+        await tx.stockBatch.update({ where: { id: opening[0].id }, data: {
+          received_qty: { increment: returned }, remaining_qty: { increment: returned },
+        } });
+      } else {
+        const product = await tx.product.findUniqueOrThrow({ where: { id: productId } });
+        await tx.stockBatch.create({ data: { product_id: productId, received_qty: returned, remaining_qty: returned,
+          expiry_date: product.expiry_date, received_date: product.created_at } });
+      }
+    }
+  }
+  await syncProductStock(tx, productId);
+}
+
+export async function applyStockChange(tx: Prisma.TransactionClient, previous: StockLine[], next: Omit<StockLine, "stock_deducted_qty">[], invoiceId: string) {
   const plan = planStockChange(previous, next);
   // Stable product ordering reduces deadlocks. The guarded UPDATE is atomic,
   // so two users cannot both sell the same remaining units.
@@ -51,6 +115,7 @@ export async function applyStockChange(tx: Prisma.TransactionClient, previous: S
         ? `Insufficient stock for ${product.name}: ${product.quantity} available, ${consumed} additional units needed.`
         : "A selected product no longer exists. Reload the products and try again.");
     }
+    await adjustBatches(tx, product_id, consumed, invoiceId);
   }
   return plan.lines;
 }
@@ -59,7 +124,7 @@ export function invoiceStockLines(items: unknown) {
   if (!Array.isArray(items) || items.length === 0 || items.length > 500) throw new InventoryError("Add between 1 and 500 invoice items.");
   return items.map((item: Record<string, unknown>) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new InventoryError("Invalid invoice item.");
-    const product_id = item.product_id == null ? null : String(item.product_id);
+    const product_id = item.product_id == null ? null : String(item.product_id).toLowerCase();
     if (product_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(product_id)) throw new InventoryError("Select a valid product.");
     const qty = Number(item.qty);
     if (!Number.isSafeInteger(qty) || qty < 1 || qty > 2147483647) throw new InventoryError("Each invoice item must have a whole quantity of at least 1.");

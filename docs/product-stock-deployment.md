@@ -17,6 +17,7 @@ npm run db:upgrade:stock
 npm run db:upgrade:expiry
 npm run db:upgrade:purchases
 npm run db:upgrade:users
+npm run db:upgrade:batches
 npm run db:generate
 npm run build
 pm2 restart ssd
@@ -54,3 +55,6 @@ Invoice product selections display this information. Expiry does not block sales
 The repository no longer tracks `.env`, database backups, or `.next`. The commands
 above preserve the VPS environment before pulling that cleanup commit. Keep the
 backup private. If the pull or build fails, restore `.env` before restarting SSD.
+
+Purchases now add stock as separate FIFO batches; expiry follows the next batch
+to sell. See `fifo-stock-deployment.md` for existing-stock handling and batch tests.

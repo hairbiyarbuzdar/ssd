@@ -64,6 +64,7 @@ model Product {
   quantity     Int      @default(0)
   expiry_date  DateTime? @db.Date
   invoice_items InvoiceItem[]
+  stock_batches StockBatch[]
   created_at   DateTime @default(now()) @db.Timestamptz(6)
 
   @@map("products")
@@ -137,6 +138,7 @@ model Invoice {
   created_by_name  String        @default("")
   created_at       DateTime      @default(now()) @db.Timestamptz(6)
   items            InvoiceItem[]
+  stock_allocations StockAllocation[]
   quotations       Quotation[]
   expenses         Expense[]
 
@@ -306,6 +308,8 @@ model PurchaseOrderItem {
   description       String        @default("")
   product_id        String?       @db.Uuid
   expiry_date       DateTime?     @db.Date
+  stock_received_qty Int          @default(0)
+  stock_batch       StockBatch?
   unit              String        @default("pcs")
   qty               Decimal       @default(1) @db.Decimal(12, 2)
   rate              Decimal       @default(0) @db.Decimal(12, 2)
@@ -313,6 +317,36 @@ model PurchaseOrderItem {
   purchase_order    PurchaseOrder @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade)
 
   @@map("purchase_order_items")
+}
+
+model StockBatch {
+  id                    String            @id @default(uuid()) @db.Uuid
+  product_id            String            @db.Uuid
+  product               Product           @relation(fields: [product_id], references: [id], onDelete: Restrict)
+  purchase_item_id       String?           @unique @db.Uuid
+  purchase_item         PurchaseOrderItem? @relation(fields: [purchase_item_id], references: [id], onDelete: Restrict)
+  received_qty          Int
+  remaining_qty         Int
+  expiry_date           DateTime?          @db.Date
+  received_date         DateTime           @db.Date
+  created_at            DateTime           @default(now()) @db.Timestamptz(6)
+  allocations           StockAllocation[]
+
+  @@map("stock_batches")
+  @@index([product_id, received_date, created_at])
+}
+
+model StockAllocation {
+  id                    String      @id @default(uuid()) @db.Uuid
+  invoice_id            String      @db.Uuid
+  invoice               Invoice     @relation(fields: [invoice_id], references: [id], onDelete: Cascade)
+  batch_id              String      @db.Uuid
+  batch                 StockBatch  @relation(fields: [batch_id], references: [id], onDelete: Restrict)
+  qty                   Int
+  created_at            DateTime    @default(now()) @db.Timestamptz(6)
+
+  @@map("stock_allocations")
+  @@unique([invoice_id, batch_id])
 }
 
 model PurchaseProduct {

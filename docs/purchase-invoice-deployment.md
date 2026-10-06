@@ -17,6 +17,7 @@ npm run db:upgrade:stock
 npm run db:upgrade:expiry
 npm run db:upgrade:purchases
 npm run db:upgrade:users
+npm run db:upgrade:batches
 npm run db:generate
 npm run build
 pm2 restart ssd
@@ -30,7 +31,8 @@ lines and included in draft and saved print/PDF documents. Existing descriptions
 quantities, prices, and totals are preserved; old invoices without a catalogue
 selection can still be opened and edited.
 
-This change does not add purchases to stock automatically.
+New purchases now receive stock automatically as FIFO batches. See
+`fifo-stock-deployment.md` before deployment and for existing-stock behavior.
 
 Verify with an expiring product and a Non-expiry product: select each on separate
 lines, change their quantities, save, reopen, and inspect the PDF. Changing the

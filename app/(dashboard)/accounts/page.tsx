@@ -113,7 +113,7 @@ export default function AccountsPage() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceAccount, setInvoiceAccount] = useState<Account | null>(null);
   const [invItems, setInvItems] = useState<InvItem[]>([blankInvItem()]);
-  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null; expiry_date?: string | null }[]>([]);
+  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[]>([]);
   const [invNextNum, setInvNextNum] = useState("SSD001");
   const [invSaving, setInvSaving] = useState(false);
   const [invAmountPaid, setInvAmountPaid] = useState("");
@@ -231,7 +231,7 @@ export default function AccountsPage() {
   }, [accounts.length, partyInvoices.length, partyCashbook.length]);
 
   const fetchInvProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity");
     if (!data) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const arr = data as any[];
@@ -490,6 +490,7 @@ export default function AccountsPage() {
   }
 
   function openInvoiceModal(account: Account) {
+    void fetchInvProducts();
     setInvoiceAccount(account);
     setInvItems([blankInvItem()]);
     setInvAmountPaid("");
@@ -509,6 +510,7 @@ export default function AccountsPage() {
   }
 
   async function openEditInvoiceModal(inv: Invoice) {
+    void fetchInvProducts();
     const account = accounts.find((a) => a.name === inv.client_name);
     if (!account) { showToast("Party account not found", "err"); return; }
 
@@ -780,7 +782,7 @@ export default function AccountsPage() {
   }
   // ─────────────────────────────────────────────────────────────────────────
 
-  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null }) => {
+  const handleProductCreated = useCallback(async (newProduct: { id: string; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }) => {
     pendingProductIdsRef.current.push(newProduct.id);
     await fetchInvProducts();
     const idx = productCreate?.idx;
@@ -950,6 +952,7 @@ export default function AccountsPage() {
         await recomputeCachedBalance(invoiceAccount.name);
 
         showToast(`Invoice ${invNextNum} updated!`, "ok");
+        void fetchInvProducts();
         pendingProductIdsRef.current = [];
         closeInvoiceModal();
         setInvSaving(false);
@@ -1072,6 +1075,7 @@ export default function AccountsPage() {
         goToExpense = true;
       }
 
+      void fetchInvProducts();
       showToast(`Invoice ${confirmedNum} saved!`, "ok");
 
       if (printType === "a4" && invData) {

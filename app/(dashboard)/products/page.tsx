@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { ProductCategoryModal } from "@/components/ProductCategoryModal";
 import { ProductCategorySelect } from "@/components/ProductCategorySelect";
 import { ProductStockField } from "@/components/ProductStockField";
+import { ProductBatchList } from "@/components/ProductBatchList";
 import { ProductExpiryField } from "@/components/ProductExpiryField";
 import { db } from "@/lib/db";
 import { showToast } from "@/components/Toast";
@@ -128,7 +129,7 @@ export default function ProductsPage() {
       pricing_type: "standalone",
       category_id: fCategoryId,
       ...(!editingId ? { quantity } : {}),
-      expiry_date: fNonExpiry ? null : fExpiryDate,
+      ...(!editingId ? { expiry_date: fNonExpiry ? null : fExpiryDate } : {}),
     };
 
     if (editingId) {
@@ -312,7 +313,8 @@ export default function ProductsPage() {
               {/* Pricing Type */}
               <ProductCategorySelect value={fCategoryId} onChange={setFCategoryId} disabled={saving} />
               <ProductStockField value={fQuantity} onChange={setFQuantity} disabled={saving} readOnly={!!editingId} />
-              <ProductExpiryField nonExpiry={fNonExpiry} date={fExpiryDate} onNonExpiryChange={setFNonExpiry} onDateChange={setFExpiryDate} disabled={saving} />
+              <ProductExpiryField nonExpiry={fNonExpiry} date={fExpiryDate} onNonExpiryChange={setFNonExpiry} onDateChange={setFExpiryDate} disabled={saving || !!editingId} />
+              {editingId && <ProductBatchList productId={editingId} />}
               <div className="col-span-2 text-xs" style={{ color: "var(--gray-800)" }}>Standalone (fixed price per unit)</div>
 
               {/* Item Code */}
