@@ -13,8 +13,12 @@ import { PdfPrintBanner } from "@/components/PdfPrintBanner";
 import { PrintFooter } from "@/components/PrintFooter";
 import { SearchableSelect } from "@/components/SearchableSelect";
 import { usePaymentMethods, normalizePaymentMethod } from "@/lib/paymentMethods";
+import { buildSupplierStatements } from "@/lib/supplierStatement";
+import { buildPartyStatements } from "@/lib/partyStatement";
+import { SupplierStatementReport } from "@/components/SupplierStatementReport";
+import type { Supplier, PurchaseOrder } from "@/lib/database.types";
 
-type Tab = "account" | "cashbook" | "dailyparties" | "paymentmethod" | "expense";
+type Tab = "account" | "cashbook" | "dailyparties" | "paymentmethod" | "expense" | "supplier" | "party";
 
 const STATUS_STYLES: Record<string, { bg: string; color: string; label: string }> = {
   paid:    { bg: "var(--green-light)", color: "var(--green)", label: "Paid" },
@@ -58,6 +62,8 @@ function KpiCard({ label, value, color, sub }: { label: string; value: string; c
 }
 
 const REPORT_CARDS: { id: Tab; title: string; description: string; icon: ReactNode }[] = [
+  { id: "party", title: "Party Statement", description: "All party balances. Select a party to view debit and credit details.", icon: <Users size={22} /> },
+  { id: "supplier", title: "Supplier Statement", description: "All supplier balances. Select a supplier to view debit and credit details.", icon: <Users size={22} /> },
   { id: "account", title: "Account Statement", description: "Debit / credit ledger for one party between two dates.", icon: <FileText size={22} /> },
   { id: "cashbook", title: "Cashbook", description: "All cash in and out between the selected dates.", icon: <CalendarDays size={22} /> },
   { id: "dailyparties", title: "Daily Parties", description: "Invoices issued on a selected day by party.", icon: <Users size={22} /> },
@@ -129,6 +135,37 @@ export default function ReportsPage() {
   const [dailyInvoices, setDailyInvoices] = useState<Invoice[]>([]);
   const [dailyLoading, setDailyLoading] = useState(false);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [supplierData, setSupplierData] = useState<{ suppliers: Supplier[]; purchases: PurchaseOrder[]; payments: CashbookEntry[]; customerNames: string[] }>({ suppliers: [], purchases: [], payments: [], customerNames: [] });
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string | null>(null);
+  const [partyData, setPartyData] = useState<{ accounts: Account[]; invoices: Invoice[] }>({ accounts: [], invoices: [] });
+  const supplierStatements = useMemo(() => buildSupplierStatements(supplierData.suppliers, supplierData.purchases, supplierData.payments, fromDate, toDate, supplierData.customerNames), [supplierData, fromDate, toDate]);
+  const partyStatements = useMemo(() => buildPartyStatements(partyData.accounts, partyData.invoices, supplierData.payments, supplierData.suppliers, supplierData.purchases, fromDate, toDate), [partyData, supplierData, fromDate, toDate]);
+
+  async function fetchSupplierData(): Promise<boolean> {
+    setLoading(true);
+    setReportGenerated(false);
+    try {
+      // Full history is required for opening balances and payment allocation.
+      const [suppliers, purchases, payments, customers, partyInvoices] = await Promise.all([
+        db.from("suppliers").select("*").order("name"),
+        db.from("purchase_orders").select("*"),
+        db.from("cashbook").select("*"),
+        db.from("accounts").select("*"),
+        db.from("invoices").select("*"),
+      ]);
+      const failed = [suppliers, purchases, payments, customers, partyInvoices].find(result => result.error);
+      if (failed?.error) throw new Error(failed.error.message);
+      setSupplierData({ suppliers: suppliers.data ?? [], purchases: purchases.data ?? [], payments: payments.data ?? [], customerNames: (customers.data ?? []).map((a: { name: string }) => a.name) });
+      setPartyData({ accounts: customers.data ?? [], invoices: partyInvoices.data ?? [] });
+      setSelectedSupplierId(null);
+      return true;
+    } catch (error) {
+      setGenerateError(error instanceof Error ? error.message : "Could not load statements. Please try again.");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
 
   // ── Fetch main data ───────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -166,9 +203,6 @@ export default function ReportsPage() {
     });
   }, []);
 
-  useEffect(() => {
-    setReportGenerated(false);
-  }, [fromDate, toDate, accountFilter, methodFilter, preset, dailyDate, activeTab]);
 
   // ── Fetch daily data ──────────────────────────────────────
   const fetchDailyData = useCallback(async () => {
@@ -197,7 +231,9 @@ export default function ReportsPage() {
       setGenerateError("Select a payment method to generate this report.");
       return;
     }
-    if (activeTab === "dailyparties") {
+    if (activeTab === "supplier" || activeTab === "party") {
+      if (!await fetchSupplierData()) return;
+    } else if (activeTab === "dailyparties") {
       await fetchDailyData();
     } else {
       await fetchData();
@@ -206,12 +242,15 @@ export default function ReportsPage() {
   }
 
   function selectReport(t: Tab) {
+    setReportGenerated(false);
     setActiveTab(t);
     setGenerateError(null);
+    setSelectedSupplierId(null);
   }
 
   // ── Preset handler ────────────────────────────────────────
   function applyPreset(val: string) {
+    setReportGenerated(false);
     setPreset(val);
     const dates = getPresetDates(val);
     if (dates) { setFromDate(dates.from); setToDate(dates.to); }
@@ -276,7 +315,7 @@ export default function ReportsPage() {
   const methodCashOut = useMemo(() => methodCashbook.filter((c) => c.type === "out").reduce((s, c) => s + Number(c.amount), 0), [methodCashbook]);
 
   // ── Filter label ──────────────────────────────────────────
-  const filterLabel = `${formatDate(fromDate)} — ${formatDate(toDate)}${accountFilter !== "all" && activeTab !== "cashbook" ? ` · ${accountFilter}` : ""}${activeTab === "paymentmethod" && methodFilter !== "all" ? ` · ${methodFilter}` : ""}`;
+  const filterLabel = `${formatDate(fromDate)} — ${formatDate(toDate)}${accountFilter !== "all" && activeTab !== "cashbook" && activeTab !== "supplier" && activeTab !== "party" ? ` · ${accountFilter}` : ""}${activeTab === "paymentmethod" && methodFilter !== "all" ? ` · ${methodFilter}` : ""}`;
 
   // ──────────────────────────────────────────────────────────
   return (
@@ -352,7 +391,7 @@ export default function ReportsPage() {
                   <input
                     type="date"
                     value={dailyDate}
-                    onChange={(e) => setDailyDate(e.target.value)}
+                    onChange={(e) => { setReportGenerated(false); setDailyDate(e.target.value); }}
                     className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
                     style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
                   />
@@ -366,7 +405,7 @@ export default function ReportsPage() {
                       </label>
                       <SearchableSelect
                         value={methodFilter}
-                        onChange={setMethodFilter}
+                        onChange={(value) => { setReportGenerated(false); setMethodFilter(value); }}
                         options={paymentMethods.map((m) => ({ value: m.name, label: m.name }))}
                         placeholder="— Select payment method —"
                         emptyValue="all"
@@ -374,14 +413,14 @@ export default function ReportsPage() {
                         inputStyle={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
                       />
                     </div>
-                  ) : activeTab === "expense" || activeTab === "cashbook" ? null : (
+                  ) : activeTab === "expense" || activeTab === "cashbook" || activeTab === "supplier" || activeTab === "party" ? null : (
                   <div className="flex flex-col gap-1 min-w-[200px] flex-1 max-w-[280px]">
                     <label className="text-[9.5px] font-bold tracking-[1.2px] uppercase" style={{ color: "var(--blue-deeper)" }}>
                       Account / Party{activeTab === "account" ? " *" : ""}
                     </label>
                     <SearchableSelect
                       value={accountFilter}
-                      onChange={setAccountFilter}
+                      onChange={(value) => { setReportGenerated(false); setAccountFilter(value); }}
                       options={accounts.map((a) => ({ value: a.name, label: a.name }))}
                       placeholder={activeTab === "account" ? "— Select party —" : "— All parties —"}
                       emptyValue="all"
@@ -395,7 +434,7 @@ export default function ReportsPage() {
                     <input
                       type="date"
                       value={fromDate}
-                      onChange={(e) => { setFromDate(e.target.value); setPreset(""); }}
+                      onChange={(e) => { setReportGenerated(false); setFromDate(e.target.value); setPreset(""); }}
                       className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
                       style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
                     />
@@ -405,7 +444,7 @@ export default function ReportsPage() {
                     <input
                       type="date"
                       value={toDate}
-                      onChange={(e) => { setToDate(e.target.value); setPreset(""); }}
+                      onChange={(e) => { setReportGenerated(false); setToDate(e.target.value); setPreset(""); }}
                       className="border-[1.5px] rounded-[8px] px-2.5 py-1.5 text-[12.5px] outline-none"
                       style={{ borderColor: "var(--gray-200)", background: "var(--gray-50)", color: "var(--gray-900)" }}
                     />
@@ -445,6 +484,10 @@ export default function ReportsPage() {
         )}
 
         {/* ── TAB: ACCOUNT STATEMENT ────────────────────────── */}
+        {reportGenerated && activeTab === "party" && <SupplierStatementReport statements={partyStatements} selectedId={selectedSupplierId} onSelect={setSelectedSupplierId} onBack={() => setSelectedSupplierId(null)} party />}
+
+        {reportGenerated && activeTab === "supplier" && <SupplierStatementReport statements={supplierStatements} selectedId={selectedSupplierId} onSelect={setSelectedSupplierId} onBack={() => setSelectedSupplierId(null)} />}
+
         {reportGenerated && activeTab === "account" && (
           <div>
             {accountFilter === "all" ? (
@@ -892,13 +935,17 @@ export default function ReportsPage() {
             {activeTab === "dailyparties"
               ? `Date: ${formatDate(dailyDate)}`
               : `Period: ${formatDate(fromDate)} — ${formatDate(toDate)}`}
-            {accountFilter !== "all" && activeTab !== "paymentmethod" && activeTab !== "cashbook" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
+            {accountFilter !== "all" && activeTab !== "paymentmethod" && activeTab !== "cashbook" && activeTab !== "supplier" && activeTab !== "party" && <span style={{ marginLeft: 8, color: "#888" }}>· Party: {accountFilter}</span>}
             {activeTab === "paymentmethod" && methodFilter !== "all" && <span style={{ marginLeft: 8, color: "#888" }}>· Method: {methodFilter}</span>}
           </div>
           <div style={{ fontWeight: 900, color: "#075985", fontSize: 14, letterSpacing: 2, textTransform: "uppercase" }}>
-            {{ account: "Account Statement", cashbook: "Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report" }[activeTab]}
+            {{ account: "Account Statement", cashbook: "Cashbook", dailyparties: "Daily Parties Report", paymentmethod: "Payment Method Report", expense: "Expense Report", supplier: "Supplier Statement", party: "Party Statement" }[activeTab]}
           </div>
         </div>
+
+        {activeTab === "party" && <SupplierStatementReport statements={partyStatements} selectedId={selectedSupplierId} print party />}
+
+        {activeTab === "supplier" && <SupplierStatementReport statements={supplierStatements} selectedId={selectedSupplierId} print />}
 
         {/* Print summary */}
 
