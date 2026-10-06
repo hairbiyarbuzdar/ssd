@@ -17,14 +17,9 @@ import { useUser } from "@/lib/UserContext";
 const menuBarLinks: { name: string; href: string; adminOnly?: true }[] = [
   { name: "Head Accounts", href: "/head-accounts" },
   { name: "Cash Book",     href: "/cashbook" },
-  { name: "Expense",       href: "/expense", adminOnly: true },
-  { name: "Supplier",      href: "/supplier" },
   { name: "Invoice Report", href: "/invoice-report" },
-  { name: "Reports",       href: "/reports" },
   { name: "Quote",         href: "/quote" },
-  { name: "Delivery Challan", href: "/delivery-challan" },
   { name: "Sub Users",     href: "/users", adminOnly: true },
-  { name: "Activity Log",  href: "/activity-log" },
   { name: "Payment Methods", href: "/payment-methods", adminOnly: true },
   { name: "Change Password", href: "/change-password", adminOnly: true },
 ];
