@@ -113,7 +113,7 @@ export default function AccountsPage() {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
   const [invoiceAccount, setInvoiceAccount] = useState<Account | null>(null);
   const [invItems, setInvItems] = useState<InvItem[]>([blankInvItem()]);
-  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[]>([]);
+  const [invProducts, setInvProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number; product_categories?: { name: string } | null }[]>([]);
   const [invNextNum, setInvNextNum] = useState("SSD001");
   const [invSaving, setInvSaving] = useState(false);
   const [invAmountPaid, setInvAmountPaid] = useState("");
@@ -231,7 +231,7 @@ export default function AccountsPage() {
   }, [accounts.length, partyInvoices.length, partyCashbook.length]);
 
   const fetchInvProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity, product_categories(name)");
     if (!data) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const arr = data as any[];
@@ -1952,7 +1952,8 @@ export default function AccountsPage() {
                           <SearchableSelect
                             value={item.product}
                             onChange={(v) => updateInvItem(idx, "product", v)}
-                            options={invProducts.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
+                            maxResults={10}
+                            options={invProducts.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
                             placeholder="— Product —"
                             inputClassName="border border-[var(--gray-200)] rounded-[6px] px-2 py-1.5 text-[12px] outline-none bg-white focus:border-[var(--blue)] w-full"
                             onCreate={(q) => setProductCreate({ idx, initialName: q })}

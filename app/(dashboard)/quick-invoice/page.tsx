@@ -24,6 +24,23 @@ import { confirmDialog } from "@/components/ConfirmModal";
 import { logActivity } from "@/lib/activityLog";
 import { ProductCreateModal } from "@/components/ProductCreateModal";
 
+interface InvoiceProduct {
+  id: string;
+  code: string | null;
+  name: string;
+  sale_price: number;
+  description?: string | null;
+  pricing_type?: string | null;
+  expiry_date?: string | null;
+  quantity?: number;
+  product_categories?: { name: string } | null;
+}
+
+function productMetadata(products: InvoiceProduct[], productId: string | null | undefined, name: string) {
+  const product = products.find((p) => productId ? p.id === productId : p.name.toLowerCase() === name.toLowerCase());
+  return { serialNumber: product?.code ?? "", productCategory: product?.product_categories?.name ?? "" };
+}
+
 interface Item {
   lineType: "product" | "labor";
   product: string;
@@ -96,6 +113,8 @@ interface InvoicePdfPayload {
     bra_amount: number;
   };
   items: Array<{
+    serialNumber: string;
+    productCategory: string;
     category: string;
     description: string;
     width: number;
@@ -157,7 +176,7 @@ export default function InvoicePage() {
   const userProfile = useUser();
   const router = useRouter();
   const { methods: paymentMethods } = usePaymentMethods();
-  const [products, setProducts] = useState<{ id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[]>([]);
+  const [products, setProducts] = useState<InvoiceProduct[]>([]);
   const [nextNum, setNextNum] = useState(1);
   const [savedInvoices, setSavedInvoices] = useState<SavedInvoice[]>([]);
   const [allAccounts, setAllAccounts] = useState<{ id: string; name: string; category: string }[]>([]);
@@ -326,7 +345,7 @@ export default function InvoicePage() {
   }, []);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity");
+    const { data } = await db.from("products").select("id, code, name, sale_price, description, pricing_type, expiry_date, quantity, product_categories(name)");
     if (data) {
       const sorted = [...data].sort((a, b) => {
         const an = parseInt(String(a.code ?? ""), 10);
@@ -727,6 +746,7 @@ export default function InvoicePage() {
       showToast(itemErr.message, "err");
       return null;
     }
+    const invoiceProducts = await fetchProducts();
     return {
       invoice: {
         invoice_number: full.invoice_number as string,
@@ -749,6 +769,7 @@ export default function InvoicePage() {
         bra_amount: Number((full as Invoice).bra_amount ?? 0),
       },
       items: ((rows ?? []) as Record<string, unknown>[]).map((it) => ({
+        ...productMetadata(invoiceProducts, it.product_id ? String(it.product_id) : null, String(it.category ?? "")),
         category: String(it.category ?? ""),
         description: String(it.description ?? ""),
         width: 0,
@@ -768,7 +789,9 @@ export default function InvoicePage() {
       .eq("invoice_id", invId)
       .order("id", { ascending: true });
     if (error) throw new Error(error.message);
+    const invoiceProducts = await fetchProducts();
     return ((rows ?? []) as Record<string, unknown>[]).map((it) => ({
+      ...productMetadata(invoiceProducts, it.product_id ? String(it.product_id) : null, String(it.category ?? "")),
       category: String(it.category ?? ""),
       description: String(it.description ?? ""),
       width: 0,
@@ -805,6 +828,7 @@ export default function InvoicePage() {
         bra_amount: 0,
       },
       items: d.items.map((it) => ({
+        ...productMetadata(products, it.productId, it.product),
         category: it.lineType === "labor" ? `Labor: ${it.laborType || "General"}` : it.product,
         description: it.lineType === "labor" ? "" : it.description.trim(),
         width: it.width,
@@ -1552,6 +1576,9 @@ export default function InvoicePage() {
                       <div style={{ padding: cellPad, textAlign: "center", color: "#111", borderLeft: "1px solid #000" }}>{idx + 1}</div>
                       <div style={{ padding: cellPad, fontWeight: 600, color: "#111", borderLeft: "1px solid #000" }}>
                         <div>{it.category || "—"}</div>
+                        <div style={{ fontWeight: 400, fontSize: 11, color: "#444", marginTop: 2, overflowWrap: "anywhere" }}>
+                          Serial no.: {it.serialNumber || "—"} · Category: {it.productCategory || "—"}
+                        </div>
                         {it.description ? (
                           <div style={{ fontWeight: 400, fontSize: 11, color: "#444", marginTop: 2, whiteSpace: "pre-wrap" }}>{it.description}</div>
                         ) : null}
@@ -1657,7 +1684,7 @@ function WalkInInvoiceModal({
 }: {
   draft: WalkInDraft;
   setDraft: React.Dispatch<React.SetStateAction<WalkInDraft | null>>;
-  products: { id: string; code: string | null; name: string; sale_price: number; description?: string | null; pricing_type?: string | null; expiry_date?: string | null; quantity?: number }[];
+  products: InvoiceProduct[];
   paymentMethods: { id: string; name: string }[];
   onClose: () => void;
   onSave: () => void | Promise<void>;
@@ -1842,13 +1869,22 @@ function WalkInInvoiceModal({
                     <SearchableSelect
                       value={item.product}
                       onChange={(v) => updateItem(idx, "product", v)}
-                      options={products.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
+                      options={products.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
+                      maxResults={10}
                       placeholder="— Product —"
                       inputClassName={sm}
                       inputStyle={{ color: "#0C2433" }}
                       onCreate={(q) => onRequestCreateProduct(idx, q)}
                       createLabel="+ Add new product"
                     />
+                    {item.product && (() => {
+                      const metadata = productMetadata(products, item.productId, item.product);
+                      return (
+                        <div className="mt-1.5 text-[12px] break-words" style={{ color: "var(--gray-700)" }}>
+                          Serial no.: {metadata.serialNumber || "—"} · Category: {metadata.productCategory || "—"}
+                        </div>
+                      );
+                    })()}
                     <ProductExpiryNotice product={products.find(p => item.productId ? p.id === item.productId : p.name === item.product)} />
                     <textarea
                       value={item.description}

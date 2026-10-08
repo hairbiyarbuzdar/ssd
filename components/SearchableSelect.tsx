@@ -12,6 +12,8 @@ interface SearchableSelectProps {
   value: string;
   onChange: (value: string) => void;
   options: Option[];
+  /** Maximum matches displayed after filtering the full option list. */
+  maxResults?: number;
   /** Text shown in the "clear / all" row at the top of the list */
   placeholder?: string;
   /** Value emitted when the clear row is selected (default: "") */
@@ -29,6 +31,7 @@ export function SearchableSelect({
   value,
   onChange,
   options,
+  maxResults,
   placeholder = "— Select —",
   emptyValue = "",
   inputClassName = "",
@@ -47,9 +50,19 @@ export function SearchableSelect({
   const isEmpty = value === emptyValue || value === "";
 
   const trimmedQuery = query.trim();
-  const filtered = trimmedQuery
-    ? options.filter((o) => o.label.toLowerCase().includes(trimmedQuery.toLowerCase()))
+  const normalizedQuery = trimmedQuery.toLowerCase();
+  const matches = trimmedQuery
+    ? options
+        .filter((o) => `${o.value} ${o.label}`.toLowerCase().includes(normalizedQuery))
+        .sort((a, b) => {
+          const rank = (o: Option) => {
+            const name = o.value.toLowerCase();
+            return name === normalizedQuery ? 0 : name.startsWith(normalizedQuery) ? 1 : 2;
+          };
+          return rank(a) - rank(b);
+        })
     : options;
+  const filtered = maxResults === undefined ? matches : matches.slice(0, maxResults);
   const hasExactMatch = trimmedQuery
     ? options.some((o) => o.label.toLowerCase() === trimmedQuery.toLowerCase() || o.value.toLowerCase() === trimmedQuery.toLowerCase())
     : false;
@@ -117,8 +130,9 @@ export function SearchableSelect({
     setHighlight(0);
   }
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setQuery(e.target.value);
+  function handleInput(e: React.FormEvent<HTMLInputElement>) {
+    setQuery(e.currentTarget.value);
+    if (dropdownRef.current) dropdownRef.current.scrollTop = 0;
     setOpen(true);
     setHighlight(0);
   }
@@ -249,7 +263,7 @@ export function SearchableSelect({
         value={displayValue}
         placeholder={isEmpty ? placeholder : selectedLabel}
         onFocus={handleFocus}
-        onChange={handleChange}
+        onInput={handleInput}
         onKeyDown={handleKeyDown}
         className={inputClassName}
         style={inputStyle}
