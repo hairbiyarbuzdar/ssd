@@ -523,7 +523,7 @@ export default function AccountsPage() {
 
     const mappedItems: InvItem[] = ((itemRows ?? []) as Record<string, unknown>[]).map((it) => {
       const productName = String(it.category || "");
-      const dbProd = invProducts.find((p) => p.name === productName);
+      const dbProd = invProducts.find((p) => it.product_id ? p.id === String(it.product_id) : p.name === productName);
       const pricingType = "standalone" as const;
       return calcInvItem({
         lineType: "product",
@@ -813,9 +813,9 @@ export default function AccountsPage() {
     setInvItems((prev) => {
       const items = [...prev];
       let item = { ...items[idx], [field]: value };
-      if (field === "product") {
-        item.productId = null;
-        const dbProd = invProducts.find((p) => p.name === value);
+      if (field === "productId") {
+        const dbProd = invProducts.find((p) => p.id === value);
+        item = { ...item, productId: dbProd?.id ?? null, product: dbProd?.name ?? "", description: dbProd?.description?.trim() ?? "", rate: dbProd ? Number(dbProd.sale_price) || 0 : 0 };
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
           item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: "standalone" };
@@ -1950,10 +1950,10 @@ export default function AccountsPage() {
                         {/* Product */}
                         <td className="px-2 py-2 border-b border-[var(--gray-100)]" style={{ minWidth: 160 }}>
                           <SearchableSelect
-                            value={item.product}
-                            onChange={(v) => updateInvItem(idx, "product", v)}
+                            value={item.productId ?? invProducts.find((p) => p.name === item.product)?.id ?? ""}
+                            onChange={(v) => updateInvItem(idx, "productId", v)}
                             maxResults={10}
-                            options={invProducts.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
+                            options={invProducts.map((p) => ({ value: p.id, searchText: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
                             placeholder="— Product —"
                             inputClassName="border border-[var(--gray-200)] rounded-[6px] px-2 py-1.5 text-[12px] outline-none bg-white focus:border-[var(--blue)] w-full"
                             onCreate={(q) => setProductCreate({ idx, initialName: q })}

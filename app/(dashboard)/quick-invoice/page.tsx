@@ -473,7 +473,7 @@ export default function InvoicePage() {
     }
     const mapped = ((rows ?? []) as Record<string, unknown>[]).map((r) => {
       const productName = String(r.category ?? "");
-      const dbProd = products.find((p) => p.name === productName);
+      const dbProd = products.find((p) => r.product_id ? p.id === String(r.product_id) : p.name === productName);
       const pricingType = "standalone" as const;
       return {
         lineType: "product" as const,
@@ -1715,9 +1715,9 @@ function WalkInInvoiceModal({
       if (!d) return null;
       const items = [...d.items];
       let item = { ...items[idx], [field]: value };
-      if (field === "product") {
-        item.productId = null;
-        const dbProd = products.find((p) => p.name === value);
+      if (field === "productId") {
+        const dbProd = products.find((p) => p.id === value);
+        item = { ...item, productId: dbProd?.id ?? null, product: dbProd?.name ?? "", description: dbProd?.description?.trim() ?? "", rate: dbProd ? Number(dbProd.sale_price) || 0 : 0 };
         if (dbProd) {
           const isStandalone = dbProd.pricing_type === "standalone";
           item = { ...item, productId: dbProd.id, rate: dbProd.sale_price, pricingType: "standalone" };
@@ -1867,9 +1867,9 @@ function WalkInInvoiceModal({
                 <tr key={idx} className="transition-colors hover:bg-[var(--blue-pale)]">
                   <td className="px-2 py-3 border-b border-[var(--gray-100)]" style={{ minWidth: 150 }}>
                     <SearchableSelect
-                      value={item.product}
-                      onChange={(v) => updateItem(idx, "product", v)}
-                      options={products.map((p) => ({ value: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
+                      value={item.productId ?? products.find((p) => p.name === item.product)?.id ?? ""}
+                      onChange={(v) => updateItem(idx, "productId", v)}
+                      options={products.map((p) => ({ value: p.id, searchText: p.name, label: `${p.code ? `#${p.code} - ` : ""}${p.name} | ${p.product_categories?.name || "Uncategorized"} | ${p.expiry_date ? `Expires ${p.expiry_date.slice(0, 10)}` : "Non-expiry"}` }))}
                       maxResults={10}
                       placeholder="— Product —"
                       inputClassName={sm}

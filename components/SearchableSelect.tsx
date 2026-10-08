@@ -6,6 +6,8 @@ import { createPortal } from "react-dom";
 interface Option {
   value: string;
   label: string;
+  /** Human-readable name when value is a unique ID. */
+  searchText?: string;
 }
 
 interface SearchableSelectProps {
@@ -53,10 +55,10 @@ export function SearchableSelect({
   const normalizedQuery = trimmedQuery.toLowerCase();
   const matches = trimmedQuery
     ? options
-        .filter((o) => `${o.value} ${o.label}`.toLowerCase().includes(normalizedQuery))
+        .filter((o) => `${o.searchText ?? o.value} ${o.label}`.toLowerCase().includes(normalizedQuery))
         .sort((a, b) => {
           const rank = (o: Option) => {
-            const name = o.value.toLowerCase();
+            const name = (o.searchText ?? o.value).toLowerCase();
             return name === normalizedQuery ? 0 : name.startsWith(normalizedQuery) ? 1 : 2;
           };
           return rank(a) - rank(b);
@@ -64,7 +66,7 @@ export function SearchableSelect({
     : options;
   const filtered = maxResults === undefined ? matches : matches.slice(0, maxResults);
   const hasExactMatch = trimmedQuery
-    ? options.some((o) => o.label.toLowerCase() === trimmedQuery.toLowerCase() || o.value.toLowerCase() === trimmedQuery.toLowerCase())
+    ? options.some((o) => o.label.toLowerCase() === trimmedQuery.toLowerCase() || (o.searchText ?? o.value).toLowerCase() === trimmedQuery.toLowerCase())
     : false;
   const showCreateRow = !!onCreate && trimmedQuery.length > 0 && !hasExactMatch;
 
